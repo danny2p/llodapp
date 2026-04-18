@@ -1,0 +1,13 @@
+# Scan inputs and generated artifacts
+*.stl
+*.ply
+*.nc
+python-proto/out/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# macOS
+.DS_Store
