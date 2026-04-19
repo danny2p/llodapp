@@ -22,7 +22,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 HERE = Path(__file__).resolve().parent
@@ -41,16 +41,49 @@ app.add_middleware(
 
 
 def _run(cmd: list[str]) -> None:
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
+    # Use Popen + communicate to avoid deadlocks when buffer fills up
+    process = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    stdout, stderr = process.communicate()
+    
+    if process.returncode != 0:
         raise HTTPException(
             status_code=500,
             detail={
                 "cmd": cmd,
-                "stdout": result.stdout[-2000:],
-                "stderr": result.stderr[-2000:],
+                "stdout": stdout[-2000:],
+                "stderr": stderr[-2000:],
             },
         )
+
+
+async def _run_stream(cmd: list[str]):
+    """Run a command and yield progress markers + final status."""
+    process = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        bufsize=1,
+        universal_newlines=True,
+    )
+
+    if process.stdout:
+        for line in iter(process.stdout.readline, ""):
+            if line.startswith("__PROGRESS__:"):
+                try:
+                    data = json.loads(line.split("__PROGRESS__:", 1)[1])
+                    yield {"type": "progress", "data": data}
+                except:
+                    pass
+
+    return_code = process.wait()
+    if return_code != 0:
+        stderr = process.stderr.read() if process.stderr else ""
+        yield {"type": "error", "detail": {"code": return_code, "stderr": stderr}}
+    else:
+        yield {"type": "complete"}
 
 
 def _one(job_dir: Path, pattern: str) -> Path:
@@ -113,9 +146,104 @@ async def align(
         "alignedUrl": f"/jobs/{job_id}/{gun_path.name}",
     }
 
+@app.post("/api/process-stream")
+async def process_stream(
+    file: UploadFile,
+    voxel_pitch: float = Form(0.25),
+    smooth_sigma: float = Form(0.8),
+    plug_decim_target: int = Form(60_000),
+    gun_decim_target: int = Form(60_000),
+    smooth_iter: int = Form(0),
+    total_length: float = Form(160.0),
+    mirror: bool = Form(False),
+    rotate_z_deg: float = Form(0.0),
+    features_state: str = Form(...),
+):
+    if not file.filename or not file.filename.lower().endswith(".stl"):
+        raise HTTPException(status_code=400, detail="upload must be a .stl file")
+
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = JOBS_DIR / job_id
+    job_dir.mkdir()
+
+    stem = Path(file.filename).stem
+    safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem) or "upload"
+    input_path = job_dir / f"{safe_stem}.stl"
+    with input_path.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    features_path = job_dir / "features_state.json"
+    features_path.write_text(features_state)
+
+    async def event_generator():
+        yield json.dumps({"type": "progress", "data": {"p": 0.0, "l": "initializing pipeline"}}) + "\n"
+
+        cmd: list[str] = [
+            sys.executable, str(HERE / "prototype_v11_mabr.py"),
+            "--input", str(input_path),
+            "--out-dir", str(job_dir),
+            "--decim-target", str(plug_decim_target),
+            "--gun-decim-target", str(gun_decim_target),
+            "--voxel-pitch", str(voxel_pitch),
+            "--smooth-sigma", str(smooth_sigma),
+            "--smooth-iter", str(smooth_iter),
+            "--total-length", str(total_length),
+            "--rotate-z-deg", str(rotate_z_deg),
+            "--features-state", str(features_path),
+        ]
+        if mirror:
+            cmd.append("--mirror")
+
+        async for msg in _run_stream(cmd):
+            if msg["type"] == "error":
+                yield json.dumps(msg) + "\n"
+                return
+            yield json.dumps(msg) + "\n"
+
+        yield json.dumps({"type": "progress", "data": {"p": 0.98, "l": "splitting mold into halves"}}) + "\n"
+
+        # Split is fast, usually doesn't need its own stream logic but we can wrap it
+        plug_path = _one(job_dir, f"*_swept_mabr_*_decim{plug_decim_target}*.stl")
+        gun_path = _one(job_dir, f"*_mabr_aligned_decim{gun_decim_target}*.stl")
+
+        try:
+            _run([
+                sys.executable, str(HERE / "split_plug.py"),
+                "--input", str(plug_path),
+                "--out-dir", str(job_dir),
+            ])
+        except Exception as e:
+            yield json.dumps({"type": "error", "detail": {"code": 500, "stderr": str(e)}}) + "\n"
+            return
+
+        left_path = _one(job_dir, "*_left.stl")
+        right_path = _one(job_dir, "*_right.stl")
+
+        tg_json = job_dir / "tg.json"
+        tg_anchor = None
+        if tg_json.exists():
+            tg_anchor = json.loads(tg_json.read_text())
+
+        def url(p: Path) -> str:
+            return f"/jobs/{job_id}/{p.name}"
+
+        result = {
+            "jobId": job_id,
+            "gunUrl": url(gun_path),
+            "fullUrl": url(plug_path),
+            "leftUrl": url(left_path),
+            "rightUrl": url(right_path),
+            "tgAnchor": tg_anchor,
+        }
+
+        yield json.dumps({"type": "result", "data": result}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
 
 @app.post("/api/process")
 async def process(
+...
     file: UploadFile,
     voxel_pitch: float = Form(0.25),
     smooth_sigma: float = Form(0.8),
