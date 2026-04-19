@@ -1014,135 +1014,130 @@ function FeatureTagCard({
   updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
   clearFeaturePoint: (featureId: string, pointIndex: number) => void;
 }) {
-  const { tagged, required, complete } = featureProgress(def, state);
+  const { complete } = featureProgress(def, state);
 
   return (
     <div
-      className={`border transition-all ${
-        !state.enabled
-          ? "border-[var(--hud-line)] bg-transparent opacity-40 grayscale"
-          : complete
-          ? "border-[var(--hud-line)] bg-[var(--hud-panel-2)]"
-          : "border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)]"
+      className={`flex flex-col gap-1.5 transition-all ${
+        !state.enabled ? "opacity-40 grayscale" : "opacity-100"
       }`}
     >
-      {/* Integrated header: label + progress + power toggle */}
-      <div className="flex items-center justify-between pl-3 pr-1 py-1.5 border-b border-[var(--hud-line)]">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <div className="relative w-2.5 h-2.5 shrink-0">
-            <div
-              className="absolute inset-0 opacity-30"
-              style={{ background: def.color, filter: "blur(3px)" }}
-            />
-            <div
-              className="relative w-2.5 h-2.5"
-              style={{
-                background: state.enabled ? def.color : "transparent",
-                border: `1px solid ${def.color}`,
-                boxShadow: state.enabled ? `0 0 5px ${def.color}` : "none",
-              }}
-            />
-          </div>
-          <span
-            className={`font-display text-[11px] uppercase tracking-[0.14em] truncate ${
-              state.enabled
-                ? "text-[var(--hud-text)]"
-                : "text-[var(--hud-text-ghost)]"
+      {def.points.map((slot, i) => {
+        const active =
+          activeTag?.featureId === def.id && activeTag.pointIndex === i;
+        const coord = state.points[i];
+        
+        // Is this the 'primary' row for the feature? 
+        // For single-point features, this is the only row.
+        const isPrimary = i === 0;
+
+        return (
+          <div
+            key={slot.id}
+            className={`group/tile relative border transition-all ${
+              active
+                ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.12)] shadow-[0_0_15px_rgba(45,212,191,0.1)]"
+                : coord && state.enabled
+                ? "border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)]"
+                : "border-[var(--hud-line)] bg-transparent hover:border-[var(--hud-line-strong)]"
             }`}
           >
-            {def.label}
-          </span>
-          {state.enabled && (
-            <span className="font-mono text-[9px] text-[var(--hud-text-faint)] tabular-nums">
-              {tagged}/{required}
-            </span>
-          )}
-        </div>
+            <div className="flex items-stretch h-11">
+              {/* Power Toggle Section - Integrated into the left side of the tile */}
+              {isPrimary && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const next = !state.enabled;
+                    updateFeatureEnabled(def.id, next);
+                    if (!next && activeTag?.featureId === def.id) setActiveTag(null);
+                  }}
+                  className={`w-9 shrink-0 flex items-center justify-center border-r border-[var(--hud-line)] transition-colors ${
+                    state.enabled
+                      ? "text-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.05)]"
+                      : "text-[var(--hud-text-ghost)] hover:text-[var(--hud-text-dim)]"
+                  }`}
+                  title={state.enabled ? "Disable Feature" : "Enable Feature"}
+                >
+                  <Power size={12} strokeWidth={state.enabled ? 3 : 2} />
+                </button>
+              )}
 
-        <button
-          onClick={() => {
-            const next = !state.enabled;
-            updateFeatureEnabled(def.id, next);
-            if (!next && activeTag?.featureId === def.id) setActiveTag(null);
-          }}
-          className={`shrink-0 w-7 h-7 flex items-center justify-center transition-all ${
-            state.enabled
-              ? "text-[var(--hud-teal-bright)] opacity-100"
-              : "text-[var(--hud-text-faint)] opacity-50 hover:text-[var(--hud-text-dim)]"
-          }`}
-          title={state.enabled ? "Disable feature" : "Enable feature"}
-          aria-pressed={state.enabled}
-        >
-          <Power size={12} strokeWidth={state.enabled ? 3 : 2} />
-        </button>
-      </div>
+              {/* Main Interaction Area */}
+              <div
+                role="button"
+                tabIndex={0}
+                onClick={() => {
+                  if (!state.enabled) updateFeatureEnabled(def.id, true);
+                  setActiveTag({ featureId: def.id, pointIndex: i });
+                }}
+                className="flex-1 flex items-center gap-3 px-3 cursor-pointer select-none"
+              >
+                {/* Feature Status indicator */}
+                <div className="relative w-2 h-2 shrink-0">
+                  <div
+                    className="absolute inset-0 opacity-40"
+                    style={{ background: def.color, filter: "blur(3px)" }}
+                  />
+                  <div
+                    className="relative w-2 h-2"
+                    style={{
+                      background: (coord && state.enabled) ? def.color : "transparent",
+                      border: `1px solid ${def.color}`,
+                      boxShadow: (coord && state.enabled) ? `0 0 5px ${def.color}` : "none",
+                    }}
+                  />
+                </div>
 
-      {/* Point chips — always visible but disabled if state is off */}
-      <div className={`flex flex-col gap-1 p-2 ${!state.enabled ? "pointer-events-none" : ""}`}>
-        {def.points.map((slot, i) => {
-          const active =
-            activeTag?.featureId === def.id && activeTag.pointIndex === i;
-          const coord = state.points[i];
-          return (
-            <div
-              key={slot.id}
-              role="button"
-              tabIndex={state.enabled ? 0 : -1}
-              onClick={() => setActiveTag({ featureId: def.id, pointIndex: i })}
-              className={`group/p relative text-left px-2 py-1.5 border transition-all cursor-pointer ${
-                active
-                  ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.08)]"
-                  : coord
-                  ? "border-[var(--hud-line)]"
-                  : "border-[var(--hud-line-strong)]/40"
-              }`}
-            >
-              <div className="flex items-center gap-2">
                 <div className="flex flex-col min-w-0 flex-1">
                   <div className="flex items-baseline gap-2">
-                    <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
-                      P.{String(i + 1).padStart(2, "0")}
+                    <span className={`font-display text-[11px] uppercase tracking-[0.14em] transition-colors ${
+                      active ? "text-[var(--hud-teal-bright)]" : "text-[var(--hud-text)]"
+                    }`}>
+                      {isPrimary ? def.label : slot.label}
                     </span>
-                    <span className="font-display text-[10.5px] uppercase tracking-wider text-[var(--hud-text)] truncate">
-                      {slot.label}
-                    </span>
+                    {!isPrimary && (
+                      <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
+                        P.{String(i + 1).padStart(2, "0")}
+                      </span>
+                    )}
                   </div>
-                  {coord ? (
+                  
+                  {coord && state.enabled ? (
                     <span className="font-mono text-[9px] text-[var(--hud-text-dim)] tabular-nums mt-0.5">
-                      X {coord[0].toFixed(1)}
-                      <span className="text-[var(--hud-text-ghost)]"> · </span>
-                      Y {coord[1].toFixed(1)}
-                      <span className="text-[var(--hud-text-ghost)]"> · </span>
-                      Z {coord[2].toFixed(1)}
+                      X {coord[0].toFixed(1)} · Y {coord[1].toFixed(1)} · Z {coord[2].toFixed(1)}
                     </span>
                   ) : (
-                    <span className="font-mono text-[9px] text-[var(--hud-text-faint)] italic mt-0.5">
-                      {active ? "AWAITING CLICK ON MODEL" : "UNSET"}
+                    <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)] uppercase tracking-wider mt-0.5">
+                      {active ? "Awaiting Capture..." : "Unlinked"}
                     </span>
                   )}
                 </div>
+
                 {active && (
-                  <Crosshair
-                    size={12}
-                    className="text-[var(--hud-teal-bright)] animate-hud-blink shrink-0"
-                  />
+                  <div className="flex items-center gap-1.5 px-1.5 py-0.5 bg-[var(--hud-teal-bright)] text-[var(--hud-void)] rounded-sm">
+                    <Crosshair size={10} className="animate-hud-spin-slow" />
+                    <span className="text-[8px] font-bold">READY</span>
+                  </div>
                 )}
+
                 {coord && state.enabled && !active && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
                       clearFeaturePoint(def.id, i);
                     }}
-                    className="shrink-0 text-[var(--hud-text-faint)] hover:text-[var(--hud-red)] p-0.5 transition-colors"
+                    className="p-1.5 text-[var(--hud-text-faint)] hover:text-[var(--hud-red)] transition-colors"
+                    title="Clear point"
                   >
-                    <X size={10} />
+                    <X size={12} />
                   </button>
                 )}
               </div>
             </div>
-          );
-        })}
-      </div>
+          </div>
+        );
+      })}
     </div>
   );
 }
