@@ -268,12 +268,33 @@ def sweep_cavity(gun_vox: np.ndarray, insertion_depth_vox: int) -> np.ndarray:
 
 def cavity_to_mesh(cavity: np.ndarray, origin: np.ndarray, pitch: float,
                    smooth_sigma: float = 0.0) -> trimesh.Trimesh:
+    # Build a signed distance-like field from the cavity, then marching cubes at
+    # level 0. EDT is locally linear near the surface, so a Gaussian at the same
+    # sigma preserves flat slopes better than Gaussian applied to a binary step
+    # function (which rings). Net effect: less visible stepping on near-planar
+    # faces at the same smoothing strength, better-preserved radii.
+    #
+    # Sub-voxel feature values (floats in [0, 1]) are retained by overwriting
+    # boundary cells with the rescaled feature value, so slide_release and
+    # friends keep their sub-voxel precision.
     from skimage import measure
-    from scipy.ndimage import gaussian_filter
-    padded = np.pad(cavity, 1, mode="constant", constant_values=0).astype(np.float32)
+    from scipy.ndimage import distance_transform_edt, gaussian_filter
+
+    padded = np.pad(cavity, 1, mode="constant", constant_values=0)
+    cavity_bin = padded > 0.5
+    inside = distance_transform_edt(cavity_bin)
+    outside = distance_transform_edt(~cavity_bin)
+    sdf = (inside - outside).astype(np.float32)  # positive inside, negative outside
+
+    if cavity.dtype != bool:
+        boundary = np.abs(sdf) <= 1.0
+        sub_voxel = (padded.astype(np.float32) * 2.0 - 1.0)
+        sdf = np.where(boundary, sub_voxel, sdf)
+
     if smooth_sigma > 0:
-        padded = gaussian_filter(padded, sigma=smooth_sigma)
-    verts, faces, _, _ = measure.marching_cubes(padded, level=0.5)
+        sdf = gaussian_filter(sdf, sigma=smooth_sigma)
+
+    verts, faces, _, _ = measure.marching_cubes(sdf, level=0.0)
     # Subtract 1.0 to account for padding
     verts = (verts - 1.0) * pitch + origin
     m = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
@@ -298,9 +319,9 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
-def _cache_key(input_path: Path, voxel_pitch: float, rotate_z_deg: float, mirror: bool) -> str:
+def _cache_key(input_path: Path, voxel_pitch: float, rotate_z_deg: float, mirror: boolean, total_length: float) -> str:
     mir = "1" if mirror else "0"
-    return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}"
+    return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}_l{total_length}"
 
 
 def _load_prep_cache(cache_base: Path, key: str):
@@ -346,6 +367,8 @@ def main() -> None:
                         help="Gaussian sigma (voxels) for cavity-grid smoothing; 0 disables.")
     parser.add_argument("--smooth-iter", type=int, default=0,
                         help="Number of Taubin smoothing iterations on the final mesh. Helps with voxel stair-stepping.")
+    parser.add_argument("--total-length", type=float, default=INSERTION_DEPTH_MM,
+                        help=f"Total length of the holster mold in mm (default {INSERTION_DEPTH_MM}).")
     parser.add_argument("--voxel-pitch", type=float, default=VOXEL_PITCH_MM,
                         help=f"Voxel grid pitch in mm (default {VOXEL_PITCH_MM}). "
                              "Lower = more detail, quadratically more compute/memory.")
@@ -385,7 +408,7 @@ def main() -> None:
         suffix += "_mir"
 
     cache_base = Path(args.cache_dir).resolve() if args.cache_dir else CACHE_DIR
-    cache_key = _cache_key(input_path, args.voxel_pitch, args.rotate_z_deg, args.mirror)
+    cache_key = _cache_key(input_path, args.voxel_pitch, args.rotate_z_deg, args.mirror, args.total_length)
     cached = None if args.no_cache else _load_prep_cache(cache_base, cache_key)
 
     if cached is not None:
@@ -437,7 +460,7 @@ def main() -> None:
         origin -= pad_vox * args.voxel_pitch
 
         console.print(f"voxel grid: {occupancy.shape}, {int(occupancy.sum()):,} filled")
-        insertion_vox = int(round(INSERTION_DEPTH_MM / args.voxel_pitch))
+        insertion_vox = int(round(args.total_length / args.voxel_pitch))
         cavity = sweep_cavity(occupancy, insertion_vox)
 
         tg = detect_trigger_guard(occupancy, origin, args.voxel_pitch, console)
@@ -503,7 +526,7 @@ def main() -> None:
     console.print(f"MC mesh: {len(mesh.faces):,} faces, watertight={mesh.is_watertight}")
 
     if args.decim_target is None:
-        raw_out = out_dir / f"{stem}_swept_mabr_{int(INSERTION_DEPTH_MM)}mm_raw{suffix}.stl"
+        raw_out = out_dir / f"{stem}_swept_mabr_{int(args.total_length)}mm_raw{suffix}.stl"
         mesh.export(raw_out)
         console.print(f"wrote {raw_out.name}  faces={len(mesh.faces):,}")
         targets = (8_000, 15_000, 30_000, 120_000)
@@ -511,7 +534,7 @@ def main() -> None:
         targets = (args.decim_target,)
 
     for target in targets:
-        out = out_dir / f"{stem}_swept_mabr_{int(INSERTION_DEPTH_MM)}mm_decim{target}{suffix}.stl"
+        out = out_dir / f"{stem}_swept_mabr_{int(args.total_length)}mm_decim{target}{suffix}.stl"
         if target < len(mesh.faces):
             dec = decimate(mesh, target)
             dec.export(out)

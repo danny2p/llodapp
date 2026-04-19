@@ -270,6 +270,61 @@ export function Select({
 }
 
 // ──────────────────────────────────────────────────────────────────
+// COLOR PICKER
+// ──────────────────────────────────────────────────────────────────
+
+export function ColorPicker({
+  label,
+  code,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  code?: string;
+  value: string;
+  onChange: (v: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between gap-3 ${
+        disabled ? "opacity-40 pointer-events-none" : ""
+      }`}
+    >
+      <div className="flex items-baseline gap-1.5 min-w-0">
+        {code && (
+          <span className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider">
+            {code}
+          </span>
+        )}
+        <span className="text-[10.5px] font-mono uppercase tracking-wider text-[var(--hud-text-dim)] truncate">
+          {label}
+        </span>
+      </div>
+      <div className="flex items-center gap-2 font-mono">
+        <span className="text-[10px] text-[var(--hud-text-dim)] tabular-nums uppercase">
+          {value}
+        </span>
+        <div className="relative w-8 h-4 border border-[var(--hud-line-strong)] cursor-pointer overflow-hidden">
+          <input
+            type="color"
+            value={value}
+            disabled={disabled}
+            onChange={(e) => onChange(e.target.value)}
+            className="absolute -inset-1 w-[200%] h-[200%] cursor-pointer opacity-0"
+          />
+          <div
+            className="absolute inset-0"
+            style={{ backgroundColor: value }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
 // TOGGLE
 // ──────────────────────────────────────────────────────────────────
 

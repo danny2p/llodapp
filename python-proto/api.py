@@ -122,6 +122,7 @@ async def process(
     plug_decim_target: int = Form(60_000),
     gun_decim_target: int = Form(60_000),
     smooth_iter: int = Form(0),
+    total_length: float = Form(160.0),
     mirror: bool = Form(False),
     rotate_z_deg: float = Form(0.0),
     features_state: str = Form(...),
@@ -151,6 +152,7 @@ async def process(
         "--voxel-pitch", str(voxel_pitch),
         "--smooth-sigma", str(smooth_sigma),
         "--smooth-iter", str(smooth_iter),
+        "--total-length", str(total_length),
         "--rotate-z-deg", str(rotate_z_deg),
         "--features-state", str(features_path),
     ]

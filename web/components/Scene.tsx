@@ -14,6 +14,7 @@ import { STLLoader } from "three-stdlib";
 import {
   FEATURES,
   type FeatureStates,
+  type GlobalParams,
 } from "@/lib/features";
 import { flfFromPoints, type Vec3 } from "@/lib/featuresFrame";
 
@@ -57,6 +58,7 @@ type SceneProps = {
   activeAccessoryId: string | null;
   onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSetActiveAccessory: (id: string | null) => void;
+  globalParams: GlobalParams;
 };
 
 // Feature overlays — iterate the registry and render each feature's own
@@ -190,7 +192,11 @@ function MoldAssets({
 
   return (
     <>
-      <ClayBlock visible={step === 2} sizeHint={plug.size} />
+      <ClayBlock
+        visible={step === 2}
+        sizeHint={plug.size}
+        totalLength={globalParams.totalLength}
+      />
       {step >= 2 && (
         <Plug
           step={step}
@@ -200,6 +206,7 @@ function MoldAssets({
           activeAccessoryId={activeAccessoryId}
           onUpdateAccessory={onUpdateAccessory}
           onSelectAccessory={onSetActiveAccessory}
+          globalParams={globalParams}
         />
       )}
     </>
@@ -263,6 +270,7 @@ function Plug({
   activeAccessoryId,
   onUpdateAccessory,
   onSelectAccessory,
+  globalParams,
 }: {
   step: Step;
   viewMode: ViewMode;
@@ -271,6 +279,7 @@ function Plug({
   activeAccessoryId: string | null;
   onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSelectAccessory: (id: string | null) => void;
+  globalParams: GlobalParams;
 }) {
   const plugMeshRef = useRef<THREE.Mesh>(null);
   const gunRef = useRef<THREE.Mesh>(null);
@@ -287,31 +296,31 @@ function Plug({
   const plugMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: "#0B1828",
+        color: globalParams.moldColor,
         metalness: 0.45,
         roughness: 0.35,
         clippingPlanes: [plugClipPlane],
-        emissive: "#5EEAD4",
+        emissive: globalParams.moldColor,
         emissiveIntensity: 0,
       }),
-    [plugClipPlane]
+    [plugClipPlane, globalParams.moldColor]
   );
   const scanPlaneRef = useRef<THREE.Mesh>(null);
   const gunMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: "#6E7480",
+        color: globalParams.gunColor,
         metalness: 0.55,
         roughness: 0.35,
         transparent: true,
         opacity: 1,
       }),
-    []
+    [globalParams.gunColor]
   );
   const halfMaterial = useMemo(
     () =>
       new THREE.MeshPhysicalMaterial({
-        color: "#D6E5EE",
+        color: globalParams.moldColor,
         metalness: 0.2,
         roughness: 0.35,
         clearcoat: 1.0,
@@ -325,7 +334,7 @@ function Plug({
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
       }),
-    []
+    [globalParams.moldColor]
   );
 
   useFrame(({ clock }, delta) => {
@@ -351,10 +360,13 @@ function Plug({
     if (rightGroupRef.current) rightGroupRef.current.visible = showRight;
 
     if (step === 2) {
-      const startX = -plug.size.x * 1.1;
+      // Start from just outside the mold block (totalLength)
+      const startX = -globalParams.totalLength * 1.1;
       const endX = 0;
       const gunX = THREE.MathUtils.lerp(startX, endX, t);
       if (gunRef.current) gunRef.current.position.x = gunX;
+      
+      // Calculate muzzle position relative to the block entrance
       const muzzleWorldX = gunX + plug.gunLeadingX;
       plugClipPlane.constant = muzzleWorldX;
 
@@ -457,9 +469,11 @@ function Plug({
 function ClayBlock({
   visible,
   sizeHint,
+  totalLength,
 }: {
   visible: boolean;
   sizeHint: THREE.Vector3;
+  totalLength: number;
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const lightRef = useRef<THREE.PointLight>(null);
@@ -481,7 +495,7 @@ function ClayBlock({
     }
   });
 
-  const w = sizeHint.x;
+  const w = totalLength;
   const h = sizeHint.y * 1.4;
   const d = sizeHint.z * 2.2;
 

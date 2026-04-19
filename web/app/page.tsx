@@ -43,6 +43,7 @@ import {
   LiveClock,
   ScanReticle,
   TypingLines,
+  ColorPicker,
 } from "@/components/hud";
 import {
   FEATURES,
@@ -82,6 +83,9 @@ export type GlobalParams = {
   gunDecimTarget: number;
   mirror: boolean;
   rotateZDeg: number;
+  gunColor: string;
+  moldColor: string;
+  totalLength: number;
 };
 
 const DEFAULT_GLOBAL_PARAMS: GlobalParams = {
@@ -92,6 +96,9 @@ const DEFAULT_GLOBAL_PARAMS: GlobalParams = {
   gunDecimTarget: 60000,
   mirror: false,
   rotateZDeg: 0,
+  gunColor: "#6e7480",
+  moldColor: "#1e3a8a",
+  totalLength: 160,
 };
 
 const CAMEL_TO_SNAKE = (s: string) =>
@@ -328,6 +335,7 @@ export default function Page() {
       for (const [k, v] of Object.entries(globalParams)) {
         form.append(CAMEL_TO_SNAKE(k), String(v));
       }
+      form.append("total_length", String(globalParams.totalLength));
       form.append("features_state", JSON.stringify(featureStates));
 
       const res = await fetch(`${API_BASE}/api/process`, {
@@ -539,6 +547,7 @@ export default function Page() {
             activeAccessoryId={activeAccessoryId}
             onUpdateAccessory={updateAccessory}
             onSetActiveAccessory={setActiveAccessoryId}
+            globalParams={globalParams}
           />
 
           <ViewportHUD
@@ -1553,6 +1562,35 @@ function ParamPanel({
           </Button>
         </div>
       )}
+
+      <Group title="Global" code="§ GLOBAL" tone="accent">
+        <ColorPicker
+          label="3D SCAN COLOR"
+          code="RGB"
+          value={globalParams.gunColor}
+          onChange={(v) => updateGlobalParam("gunColor", v)}
+          disabled={disabled}
+        />
+        <ColorPicker
+          label="MOLD COLOR"
+          code="RGB"
+          value={globalParams.moldColor}
+          onChange={(v) => updateGlobalParam("moldColor", v)}
+          disabled={disabled}
+        />
+        <Slider
+          label="TOTAL LENGTH"
+          code="Lx"
+          unit="mm"
+          value={globalParams.totalLength}
+          min={100}
+          max={250}
+          step={1}
+          hint="Total length of the holster mold (insertion depth)."
+          onChange={(v) => updateGlobalParam("totalLength", v)}
+          disabled={disabled}
+        />
+      </Group>
 
       <Group title="Detail" code="§ DETAIL" defaultOpen={false} tone="accent">
         <Slider
