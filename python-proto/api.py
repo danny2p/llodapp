@@ -29,8 +29,15 @@ HERE = Path(__file__).resolve().parent
 JOBS_DIR = HERE / "jobs"
 JOBS_DIR.mkdir(exist_ok=True)
 ACCESSORIES_DIR = HERE.parent / "accessories"
+SAMPLES_DIR = HERE / "samples"
 
 app = FastAPI(title="LLOD Holster Workshop")
+...
+@app.get("/api/samples")
+def list_samples() -> list[str]:
+    if not SAMPLES_DIR.exists():
+        return []
+    return [p.name for p in sorted(SAMPLES_DIR.glob("*.stl"))]
 
 app.add_middleware(
     CORSMiddleware,
@@ -122,22 +129,33 @@ def list_accessories() -> list[str]:
 
 @app.post("/api/align-stream")
 async def align_stream(
-    file: UploadFile,
+    file: UploadFile | None = None,
+    sample_name: str | None = Form(None),
     rotate_z_deg: float = Form(0.0),
     mirror: bool = Form(False),
 ):
-    if not file.filename or not file.filename.lower().endswith(".stl"):
-        raise HTTPException(status_code=400, detail="upload must be a .stl file")
+    if not file and not sample_name:
+        raise HTTPException(status_code=400, detail="Must provide either a file or a sample name")
 
     job_id = uuid.uuid4().hex[:12]
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir()
 
-    stem = Path(file.filename).stem
-    safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem) or "upload"
-    input_path = job_dir / f"{safe_stem}.stl"
-    with input_path.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+    if file:
+        if not file.filename or not file.filename.lower().endswith(".stl"):
+            raise HTTPException(status_code=400, detail="upload must be a .stl file")
+        stem = Path(file.filename).stem
+        safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem) or "upload"
+        input_path = job_dir / f"{safe_stem}.stl"
+        with input_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+    else:
+        sample_path = SAMPLES_DIR / sample_name # type: ignore
+        if not sample_path.exists():
+            raise HTTPException(status_code=404, detail="Sample not found")
+        stem = sample_path.stem
+        input_path = job_dir / sample_path.name
+        shutil.copy2(sample_path, input_path)
 
     async def event_generator():
         yield json.dumps({"type": "progress", "data": {"p": 0.0, "l": "initializing alignment"}}) + "\n"
@@ -209,7 +227,8 @@ async def align(
 
 @app.post("/api/process-stream")
 async def process_stream(
-    file: UploadFile,
+    file: UploadFile | None = None,
+    sample_name: str | None = Form(None),
     voxel_pitch: float = Form(0.25),
     smooth_sigma: float = Form(0.8),
     plug_decim_target: int = Form(60_000),
@@ -220,18 +239,28 @@ async def process_stream(
     rotate_z_deg: float = Form(0.0),
     features_state: str = Form(...),
 ):
-    if not file.filename or not file.filename.lower().endswith(".stl"):
-        raise HTTPException(status_code=400, detail="upload must be a .stl file")
+    if not file and not sample_name:
+        raise HTTPException(status_code=400, detail="Must provide either a file or a sample name")
 
     job_id = uuid.uuid4().hex[:12]
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir()
 
-    stem = Path(file.filename).stem
-    safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem) or "upload"
-    input_path = job_dir / f"{safe_stem}.stl"
-    with input_path.open("wb") as f:
-        shutil.copyfileobj(file.file, f)
+    if file:
+        if not file.filename or not file.filename.lower().endswith(".stl"):
+            raise HTTPException(status_code=400, detail="upload must be a .stl file")
+        stem = Path(file.filename).stem
+        safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem) or "upload"
+        input_path = job_dir / f"{safe_stem}.stl"
+        with input_path.open("wb") as f:
+            shutil.copyfileobj(file.file, f)
+    else:
+        sample_path = SAMPLES_DIR / sample_name # type: ignore
+        if not sample_path.exists():
+            raise HTTPException(status_code=404, detail="Sample not found")
+        stem = sample_path.stem
+        input_path = job_dir / sample_path.name
+        shutil.copy2(sample_path, input_path)
 
     features_path = job_dir / "features_state.json"
     features_path.write_text(features_state)

@@ -147,6 +147,10 @@ export default function Page() {
   const [step, setStep] = useState<Step>(1);
   const [viewMode, setViewMode] = useState<ViewMode>("unified");
   const [accessories, setAccessories] = useState<string[]>([]);
+  const [samples, setSamples] = useState<string[]>([]);
+  const [selectedSampleName, setSelectedSampleName] = useState<string | null>(
+    null
+  );
   const [featureStates, setFeatureStates] = useState<FeatureStates>(() =>
     initialFeatureStates()
   );
@@ -185,6 +189,16 @@ export default function Page() {
       })
       .then((data) => {
         if (Array.isArray(data)) setAccessories(data);
+      })
+      .catch((err) => console.error(err));
+
+    fetch(`${API_BASE}/api/samples`)
+      .then((res) => {
+        if (!res.ok) throw new Error("failed to fetch samples list");
+        return res.json();
+      })
+      .then((data) => {
+        if (Array.isArray(data)) setSamples(data);
       })
       .catch((err) => console.error(err));
   }, []);
@@ -282,7 +296,11 @@ export default function Page() {
   });
 
   const processFile = useCallback(
-    async (file: File, withGlobals: GlobalParams) => {
+    async (
+      file: File | null,
+      withGlobals: GlobalParams,
+      sampleName: string | null = null
+    ) => {
       setError(null);
       setIsProcessing(true);
       setAssets(null);
@@ -291,7 +309,11 @@ export default function Page() {
       setStep(1);
       try {
         const form = new FormData();
-        form.append("file", file);
+        if (file) {
+          form.append("file", file);
+        } else if (sampleName) {
+          form.append("sample_name", sampleName);
+        }
         for (const [k, v] of Object.entries(withGlobals)) {
           form.append(CAMEL_TO_SNAKE(k), String(v));
         }
@@ -345,7 +367,7 @@ export default function Page() {
   );
 
   const generateMold = useCallback(async () => {
-    if (!uploadedFile) return;
+    if (!uploadedFile && !selectedSampleName) return;
     setError(null);
     setIsProcessing(true);
     setProcessingLogs([]);
@@ -353,7 +375,11 @@ export default function Page() {
     setStep(2);
     try {
       const form = new FormData();
-      form.append("file", uploadedFile);
+      if (uploadedFile) {
+        form.append("file", uploadedFile);
+      } else if (selectedSampleName) {
+        form.append("sample_name", selectedSampleName);
+      }
       for (const [k, v] of Object.entries(globalParams)) {
         form.append(CAMEL_TO_SNAKE(k), String(v));
       }
@@ -555,7 +581,10 @@ export default function Page() {
               reset={reset}
               processingLogs={processingLogs}
               processingProgress={processingProgress}
+              samples={samples}
+              onSelectSample={(name) => processFile(null, globalParams, name)}
               />
+
             <Panel title="Processing Parameters" id="§ PROC.PARAMS">
               <ParamPanel
                 globalParams={globalParams}
@@ -840,6 +869,8 @@ function StepContext(props: {
   reset: () => void;
   processingLogs: string[];
   processingProgress: number;
+  samples: string[];
+  onSelectSample: (name: string) => void;
 }) {
   const {
     step,
@@ -868,6 +899,8 @@ function StepContext(props: {
     reset,
     processingLogs,
     processingProgress,
+    samples,
+    onSelectSample,
   } = props;
 
   const meta = STEP_META[step];
@@ -893,7 +926,11 @@ function StepContext(props: {
       }
     >
       {step === 1 && !uploadedFile && !isProcessing && (
-        <UploadDropzone handleUpload={handleUpload} />
+        <UploadDropzone
+          handleUpload={handleUpload}
+          samples={samples}
+          onSelectSample={onSelectSample}
+        />
       )}
 
       {step === 1 && isProcessing && (
@@ -951,11 +988,15 @@ function StepContext(props: {
 
 function UploadDropzone({
   handleUpload,
+  samples,
+  onSelectSample,
 }: {
   handleUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  samples: string[];
+  onSelectSample: (name: string) => void;
 }) {
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-4">
       <label className="group/drop relative cursor-pointer block">
         <input
           type="file"
@@ -982,7 +1023,27 @@ function UploadDropzone({
         </div>
       </label>
 
-      <div className="flex flex-col gap-1 text-[10px] font-mono text-[var(--hud-text-faint)]">
+      {samples.length > 0 && (
+        <div className="flex flex-col gap-2">
+          <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-widest uppercase px-1">
+            // Use Sample Specimen
+          </div>
+          <div className="grid grid-cols-1 gap-1">
+            {samples.map((name) => (
+              <button
+                key={name}
+                onClick={() => onSelectSample(name)}
+                className="hud-btn text-left justify-start gap-2"
+              >
+                <div className="w-1.5 h-1.5 bg-[var(--hud-teal-bright)]/40" />
+                <span className="truncate">{name.replace(/\.stl$/i, "")}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex flex-col gap-1 text-[10px] font-mono text-[var(--hud-text-faint)] mt-2">
         <div className="flex justify-between">
           <span>AVG.PROCESS</span>
           <span className="text-[var(--hud-text-dim)]">15–30s</span>
@@ -1097,24 +1158,26 @@ function FeatureTagCard({
 }) {
   const { complete } = featureProgress(def, state);
 
+  // Support features with zero points (automatic features)
+  const rows = def.points.length > 0 ? def.points : [null];
+
   return (
     <div
       className={`flex flex-col gap-1.5 transition-all ${
         !state.enabled ? "opacity-40 grayscale" : "opacity-100"
       }`}
     >
-      {def.points.map((slot, i) => {
+      {rows.map((slot, i) => {
         const active =
           activeTag?.featureId === def.id && activeTag.pointIndex === i;
         const coord = state.points[i];
         
         // Is this the 'primary' row for the feature? 
-        // For single-point features, this is the only row.
         const isPrimary = i === 0;
 
         return (
           <div
-            key={slot.id}
+            key={slot?.id ?? "auto"}
             className={`group/tile relative border transition-all ${
               active
                 ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.12)] shadow-[0_0_15px_rgba(45,212,191,0.1)]"
@@ -1124,7 +1187,7 @@ function FeatureTagCard({
             }`}
           >
             <div className="flex items-stretch h-11">
-              {/* Power Toggle Section - Integrated into the left side of the tile */}
+              {/* Power Toggle Section */}
               {isPrimary && (
                 <button
                   onClick={(e) => {
@@ -1150,9 +1213,14 @@ function FeatureTagCard({
                 tabIndex={0}
                 onClick={() => {
                   if (!state.enabled) updateFeatureEnabled(def.id, true);
-                  setActiveTag({ featureId: def.id, pointIndex: i });
+                  // Only activate tagging if there are actual points to tag
+                  if (def.points.length > 0) {
+                    setActiveTag({ featureId: def.id, pointIndex: i });
+                  }
                 }}
-                className="flex-1 flex items-center gap-3 px-3 cursor-pointer select-none"
+                className={`flex-1 flex items-center gap-3 px-3 select-none ${
+                  def.points.length > 0 ? "cursor-pointer" : "cursor-default"
+                }`}
               >
                 {/* Feature Status indicator */}
                 <div className="relative w-2 h-2 shrink-0">
@@ -1163,9 +1231,9 @@ function FeatureTagCard({
                   <div
                     className="relative w-2 h-2"
                     style={{
-                      background: (coord && state.enabled) ? def.color : "transparent",
+                      background: (coord && state.enabled) || (def.points.length === 0 && state.enabled) ? def.color : "transparent",
                       border: `1px solid ${def.color}`,
-                      boxShadow: (coord && state.enabled) ? `0 0 5px ${def.color}` : "none",
+                      boxShadow: (coord && state.enabled) || (def.points.length === 0 && state.enabled) ? `0 0 5px ${def.color}` : "none",
                     }}
                   />
                 </div>
@@ -1175,14 +1243,14 @@ function FeatureTagCard({
                     <span className={`font-display text-[11px] uppercase tracking-[0.14em] transition-colors ${
                       active ? "text-[var(--hud-teal-bright)]" : "text-[var(--hud-text)]"
                     }`}>
-                      {isPrimary ? def.label : slot.label}
+                      {(isPrimary || !slot) ? def.label : slot.label}
                       {isPrimary && def.intent !== "marker" && (
                         <span className="ml-2 text-[8.5px] lowercase font-mono text-[var(--hud-text-faint)] tracking-normal normal-case">
                           ({def.intent})
                         </span>
                       )}
                     </span>
-                    {!isPrimary && (
+                    {!isPrimary && slot && (
                       <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
                         P.{String(i + 1).padStart(2, "0")}
                       </span>
@@ -1192,6 +1260,10 @@ function FeatureTagCard({
                   {coord && state.enabled ? (
                     <span className="font-mono text-[9px] text-[var(--hud-text-dim)] tabular-nums mt-0.5">
                       X {coord[0].toFixed(1)} · Y {coord[1].toFixed(1)} · Z {coord[2].toFixed(1)}
+                    </span>
+                  ) : def.points.length === 0 && state.enabled ? (
+                    <span className="font-mono text-[8.5px] text-[var(--hud-teal-bright)] uppercase tracking-wider mt-0.5">
+                      Auto-Aligned
                     </span>
                   ) : (
                     <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)] uppercase tracking-wider mt-0.5">
