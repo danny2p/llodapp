@@ -1,10 +1,15 @@
 FROM python:3.12-slim
 
+# Prevent interactive prompts during build
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Install system dependencies for rtree, open3d, and mesh processing
-RUN apt-get update && apt-get install -y \
+# Added --fix-missing to handle transient network issues
+RUN apt-get update --fix-missing && apt-get install -y \
     libspatialindex-dev \
     libgl1-mesa-glx \
     libgomp1 \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

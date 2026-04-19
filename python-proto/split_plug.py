@@ -139,29 +139,29 @@ def cap_at_z0(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
 
 def split_at_z0(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
     mesh = mesh.copy()
+    # Aggressive manifold repair
     mesh.merge_vertices()
     mesh.update_faces(mesh.nondegenerate_faces())
     mesh.update_faces(mesh.unique_faces())
     mesh.fill_holes()
-
+    
+    # Slice and cap
+    # Using cap=True with a manifold input is the most reliable path.
     right = trimesh.intersections.slice_mesh_plane(
-        mesh, plane_normal=[0, 0, 1], plane_origin=[0, 0, 0], cap=False
+        mesh, plane_normal=[0, 0, 1], plane_origin=[0, 0, 0], cap=True
     )
     left = trimesh.intersections.slice_mesh_plane(
-        mesh, plane_normal=[0, 0, -1], plane_origin=[0, 0, 0], cap=False
+        mesh, plane_normal=[0, 0, -1], plane_origin=[0, 0, 0], cap=True
     )
-
-    right = cap_at_z0(right)
-    left = cap_at_z0(left)
-
+    
+    # Final post-process to ensure slicers are happy
     for half in (left, right):
         half.merge_vertices()
         half.update_faces(half.nondegenerate_faces())
-        half.fill_holes()
         half.fix_normals()
-
+        half.fill_holes()
+    
     return left, right
-
 
 def main() -> None:
     parser = argparse.ArgumentParser()

@@ -562,7 +562,8 @@ function ClayBlock({
   useFrame((_, delta) => {
     if (!ref.current) return;
     const mat = ref.current.material as THREE.MeshStandardMaterial;
-    const target = visible ? 0.55 : 0;
+    // Reduced target opacity for better internal visibility
+    const target = visible ? 0.35 : 0;
     mat.opacity = THREE.MathUtils.lerp(mat.opacity, target, delta * 3);
     ref.current.visible = mat.opacity > 0.01;
   });
@@ -574,7 +575,15 @@ function ClayBlock({
   return (
     <mesh ref={ref} position={[0, 0, 0]}>
       <boxGeometry args={[w, h, d]} />
-      <meshStandardMaterial color="#c7a57b" transparent opacity={0} roughness={0.95} metalness={0} />
+      {/* Lighter color and slight emissive to make it pop against the void background */}
+      <meshStandardMaterial
+        color="#e5e0d8"
+        transparent
+        opacity={0}
+        roughness={0.8}
+        metalness={0.1}
+        emissive="#1a1a1a"
+      />
     </mesh>
   );
 }

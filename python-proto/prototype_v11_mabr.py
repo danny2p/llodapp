@@ -508,14 +508,14 @@ def main() -> None:
     console.rule("Voxelize + sweep")
     occupancy, origin = voxelize_filled(aligned, args.voxel_pitch)
     
-    # Pad the voxel grid in Y and Z to provide headroom for offset relief channels
-    # We add headroom on all sides except X (sweep takes care of X).
+    # Pad the voxel grid in all dimensions to provide headroom for 
+    # offset relief channels and ensure clean mesh end-caps.
     pad_mm = 15.0
     pad_vox = int(np.ceil(pad_mm / args.voxel_pitch))
     # Padding: ((x_min, x_max), (y_min, y_max), (z_min, z_max))
-    occupancy = np.pad(occupancy, ((0, 0), (pad_vox, pad_vox), (pad_vox, pad_vox)), mode="constant", constant_values=0)
-    origin[1] -= pad_vox * args.voxel_pitch
-    origin[2] -= pad_vox * args.voxel_pitch
+    # We pad X now as well to ensure the grip-end face is closed cleanly.
+    occupancy = np.pad(occupancy, ((pad_vox, pad_vox), (pad_vox, pad_vox), (pad_vox, pad_vox)), mode="constant", constant_values=0)
+    origin -= pad_vox * args.voxel_pitch
     
     console.print(f"voxel grid: {occupancy.shape}, {int(occupancy.sum()):,} filled")
     insertion_vox = int(round(INSERTION_DEPTH_MM / args.voxel_pitch))
