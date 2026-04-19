@@ -170,42 +170,54 @@ def orient_muzzle_low(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     xs = mesh.vertices[:, 0]
     x_min, x_max = xs.min(), xs.max()
     span = x_max - x_min
-    # Look at the 'head' (muzzle) and 'tail' (grip/back)
+    # Look at the 'head' (low X) and 'tail' (high X)
     head = mesh.vertices[xs < x_min + 0.1 * span]
     tail = mesh.vertices[xs > x_max - 0.1 * span]
+    # Handguns are 'blunter' at the back (grip/hammer) and 'smaller' at the muzzle.
+    # We compare the cross-sectional area of the first 10% vs last 10%.
     head_area = (head[:, 1:].max(0) - head[:, 1:].min(0)).prod()
     tail_area = (tail[:, 1:].max(0) - tail[:, 1:].min(0)).prod()
+    
     if head_area > tail_area:
-        # Flip X only to muzzle-low.
+        # Muzzle is currently at high X. Rotate 180 around Y to point it to low X.
+        # This flips both X and Z, which preserves vertical (Y) orientation.
         v = mesh.vertices.copy()
         v[:, 0] = -v[:, 0]
-        # We must also flip Y or Z to maintain a right-handed system if we were doing a full rotation,
-        # but here we just want to ensure muzzle is at low X for the sweep.
-        # Actually, a 180-deg rotation around Y would flip both X and Z.
-        # Let's just flip X and then re-normalize Y to be safe.
-        return trimesh.Trimesh(vertices=v, faces=mesh.faces[:, ::-1], process=True)
+        v[:, 2] = -v[:, 2]
+        return trimesh.Trimesh(vertices=v, faces=mesh.faces, process=True)
     return mesh
 
 
 def normalize_y_orientation(mesh: trimesh.Trimesh, console: Console | None = None) -> trimesh.Trimesh:
-    """Handguns have significantly more mass (the grip) below the slide.
-    After alignment, the slide is typically centered at Y=0.
-    We ensure the 'heavy' side is at -Y.
+    """Handguns have a long, continuous slide at the top and a shorter grip bottom.
+    We compare the X-span of the top 20% vs the bottom 20% to detect upside-down scans.
     """
     ys = mesh.vertices[:, 1]
-    y_center = (ys.min() + ys.max()) / 2.0
+    y_min, y_max = ys.min(), ys.max()
+    y_span = y_max - y_min
     
-    above = (ys > y_center).sum()
-    below = (ys < y_center).sum()
+    # Define top and bottom zones
+    top_mask = ys > (y_max - 0.2 * y_span)
+    bot_mask = ys < (y_min + 0.2 * y_span)
     
-    if above > below:
+    def get_x_span(mask):
+        if not mask.any(): return 0
+        vx = mesh.vertices[mask, 0]
+        return vx.max() - vx.min()
+    
+    t_span = get_x_span(top_mask)
+    b_span = get_x_span(bot_mask)
+    
+    # If the bottom is significantly 'longer' in X than the top, 
+    # it's almost certainly the slide being at the bottom.
+    if b_span > t_span:
         if console:
             console.print("[yellow]Vertical flip detected: orienting grip down (-Y)[/yellow]")
+        # Rotate 180 around X: flip Y and Z
         v = mesh.vertices.copy()
         v[:, 1] = -v[:, 1]
         v[:, 2] = -v[:, 2]
-        faces = mesh.faces[:, ::-1] # Reverse winding to keep normals outward
-        return trimesh.Trimesh(vertices=v, faces=faces, process=True)
+        return trimesh.Trimesh(vertices=v, faces=mesh.faces, process=True)
     return mesh
 
 
