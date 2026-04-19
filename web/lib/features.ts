@@ -79,6 +79,7 @@ export type FeatureOverlayProps = {
   def: FeatureDef;
   state: FeatureState;
   flf: FLF;
+  globalParams: GlobalParams;
 };
 
 export type FeatureDef = {

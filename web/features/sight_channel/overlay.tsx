@@ -4,7 +4,7 @@ import React, { useMemo } from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
-export default function SightChannelOverlay({ def, state, globalParams }: FeatureOverlayProps & { globalParams: any }) {
+export default function SightChannelOverlay({ def, state, globalParams, flf }: FeatureOverlayProps) {
   const h = Number(state.values.height ?? 10);
   const w = Number(state.values.width ?? 4);
   const ox = Number(state.values.offsetX ?? -19);
