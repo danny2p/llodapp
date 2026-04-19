@@ -188,54 +188,25 @@ def orient_muzzle_low(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return mesh
 
 
-def normalize_y_orientation(mesh: trimesh.Trimesh, console: Console | None = None, manual_features: dict | None = None) -> trimesh.Trimesh:
-    """Ensure the grip faces down (-Y). 
-    If manual features exist, the Trigger Guard is the absolute truth.
-    Otherwise, we use the X-span heuristic.
+def normalize_y_orientation(mesh, console=None, manual_features=None):
+    """Handguns are top-heavy (slide is more massive than grip).
+    After centering the centroid at (0,0,0), the distance to the grip bottom
+    (-Y) should be greater than the distance to the slide top (+Y).
     """
     ys = mesh.vertices[:, 1]
     y_min, y_max = ys.min(), ys.max()
-    y_span = y_max - y_min
-    y_mid = (y_min + y_max) / 2.0
-
-    flip_needed = False
     
-    # 1. Primary Truth: Manual Features
-    if manual_features and "tg_front" in manual_features:
-        tg_y = manual_features["tg_front"][1]
-        # Trigger guard front must be in the bottom half of the gun
-        if tg_y > y_mid:
-            if console: console.print("[yellow]Orientation check: Trigger Guard tag is in upper half. Flipping...[/yellow]")
-            flip_needed = True
-    
-    # 2. Heuristic: X-Span (Slide is longer than grip-bottom)
-    else:
-        # Define top and bottom zones (25% each)
-        top_mask = ys > (y_max - 0.25 * y_span)
-        bot_mask = ys < (y_min + 0.25 * y_span)
-        
-        def get_x_span(mask):
-            if not mask.any(): return 0
-            vx = mesh.vertices[mask, 0]
-            return vx.max() - vx.min()
-        
-        t_span = get_x_span(top_mask)
-        b_span = get_x_span(bot_mask)
-        
-        if b_span > t_span * 1.1: # 10% margin for stability
-            if console: console.print("[yellow]Orientation check: Heuristic detects upside-down scan. Flipping...[/yellow]")
-            flip_needed = True
-
-    if flip_needed:
-        # Rotate 180 around X: flip Y and Z. 
-        # This preserves winding order (right-handedness).
+    # If the bounding box center is above the centroid, it means
+    # there is more geometric extension in the +Y direction (upside down).
+    if (y_min + y_max) > 0:
+        if console:
+            console.print("[yellow]Orientation check: mass-distribution detects upside-down scan. Flipping...[/yellow]")
+        # Rotate 180 around X
         v = mesh.vertices.copy()
         v[:, 1] = -v[:, 1]
         v[:, 2] = -v[:, 2]
         return trimesh.Trimesh(vertices=v, faces=mesh.faces, process=True)
-    
     return mesh
-
 
 def make_axis_gizmos(length_mm: float = 80.0, thickness_mm: float = 3.0) -> trimesh.Trimesh:
     boxes = []
