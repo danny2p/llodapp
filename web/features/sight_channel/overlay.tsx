@@ -1,66 +1,40 @@
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
-export default function SightChannelOverlay({ def, state, flf }: FeatureOverlayProps) {
+export default function SightChannelOverlay({ def, state, globalParams }: FeatureOverlayProps & { globalParams: any }) {
   const h = Number(state.values.height ?? 10);
-  const d = Number(state.values.depth ?? 6);
-  const l = Number(state.values.length ?? 160);
+  const w = Number(state.values.width ?? 4);
+  const ox = Number(state.values.offsetX ?? -10);
+  const oy = Number(state.values.offsetY ?? 50);
   const rz = Number(state.values.rotateZ ?? 0);
-  const bothSides = Boolean(state.values.bothSides ?? true);
+  const totalLength = Number(globalParams?.totalLength ?? 160);
 
-  // CONVENTION:
-  // FLF +X is toward Muzzle (Right in viewer).
-  // FLF +Y is UP.
-  // Click is "Front Bottom Edge".
-  // Channel must extend from Click (X=0) toward ENTRANCE (-X).
-  // Channel must extend from Click (Y=0) UPWARD (+Y).
+  // CONVENTION (Viewer Space):
+  // X axis: Muzzle is +X, Grip is -X.
+  // Y axis: UP is +Y.
   
-  // Box center in local FLF:
-  // X: move by -l/2
-  // Y: move by h/2
-  // Z: if bothSides, center on Z=0. If not, grow in +Z.
-  const pos = new THREE.Vector3(-l / 2, h / 2, 0);
-  
-  // If not both sides, we might want to offset Z so it only covers one half.
-  // But usually sight channels are centered.
-  const zSize = bothSides ? d * 2 : d;
-  if (!bothSides) {
-      pos.z = d / 2;
-  }
+  // The Sight Channel should span the whole length and be centered.
+  const geometry = useMemo(() => {
+    return new THREE.BoxGeometry(totalLength, h, w);
+  }, [totalLength, h, w]);
 
-  const localRotation = new THREE.Euler(0, 0, (rz * Math.PI) / 180);
-
-  const matrix = new THREE.Matrix4();
-  matrix.set(
-    flf.R[0][0], flf.R[0][1], flf.R[0][2], 0,
-    flf.R[1][0], flf.R[1][1], flf.R[1][2], 0,
-    flf.R[2][0], flf.R[2][1], flf.R[2][2], 0,
-    0, 0, 0, 1
-  );
-  const quaternion = new THREE.Quaternion().setFromRotationMatrix(matrix);
+  // VERTICAL POSITIONING:
+  // Use manual offsets directly.
+  const position = new THREE.Vector3(ox, oy, 0);
 
   return (
-    <group position={flf.origin} quaternion={quaternion}>
-      <group rotation={localRotation}>
-        <mesh position={pos}>
-          <boxGeometry args={[l, h, zSize]} />
-          <meshBasicMaterial
-            color={def.color}
-            transparent
-            opacity={0.3}
-            wireframe
-          />
-        </mesh>
-        
-        {/* Origin indicator (Front Bottom Edge) */}
-        <mesh position={[0, 0, 0]}>
-          <sphereGeometry args={[1, 16, 16]} />
-          <meshBasicMaterial color={def.color} />
-        </mesh>
-      </group>
+    <group position={position} rotation={[0, 0, (rz * Math.PI) / 180]}>
+      <mesh geometry={geometry}>
+        <meshBasicMaterial
+          color={def.color}
+          transparent
+          opacity={0.3}
+          wireframe
+        />
+      </mesh>
     </group>
   );
 }

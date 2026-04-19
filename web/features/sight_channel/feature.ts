@@ -4,20 +4,18 @@ import Overlay from "./overlay";
 const feature: FeatureDef = {
   id: "sight_channel",
   label: "Sight Channel",
-  description: "Additive rectangular ridge to clear iron sights during draw.",
+  description: "Automatic rectangular ridge centered on the slide to clear iron sights.",
   color: "#5eead4", // Teal (additive)
   published: true,
   enabledByDefault: true,
   intent: "additive",
-  points: [
-    { id: "origin", label: "Front Bottom Edge", hint: "The point where the channel starts (nearest the muzzle)." },
-  ],
+  points: [], // No manual tagging required
   params: [
-    { id: "height",    type: "number", label: "Height (Y)",  unit: "mm",  default: 10,  min: 2,   max: 50,  step: 1,   hint: "Vertical extension from the slide." },
-    { id: "depth",     type: "number", label: "Depth (Z)",   unit: "mm",  default: 6,   min: 1,   max: 30,  step: 1,   hint: "Thickness of the ridge." },
-    { id: "length",    type: "number", label: "Length (X)",  unit: "mm",  default: 160, min: 20,  max: 300, step: 1,   hint: "Distance from click toward the grip." },
-    { id: "rotateZ",   type: "number", label: "Rotate Z",    unit: "deg", default: 0,   min: -90, max: 90,  step: 1,   hint: "Angle alignment on the slide." },
-    { id: "bothSides", type: "toggle", label: "Both Sides",  code: "±",   default: true, hint: "Mirror onto both mold halves." },
+    { id: "height",    type: "number", label: "Height (Y)",  unit: "mm",  default: 10, min: 2,   max: 50,  step: 1,   hint: "Total vertical size (default: 5mm exposed, 5mm buried)." },
+    { id: "width",     type: "number", label: "Width (Z)",   unit: "mm",  default: 4,  min: 1,   max: 30,  step: 1,   hint: "Ridge thickness centered on slide." },
+    { id: "offsetX",   type: "number", label: "Offset X",   unit: "mm",  default: -10, min: -100,max: 100, step: 1,   hint: "Shift forward/backward along the slide." },
+    { id: "offsetY",   type: "number", label: "Offset Y",   unit: "mm",  default: 50,  min: -50, max: 100, step: 0.5, hint: "Shift up/down relative to slide top." },
+    { id: "rotateZ",   type: "number", label: "Rotate Z",    unit: "deg", default: 0,  min: -10, max: 10,  step: 0.5, hint: "Fine angle adjustment." },
   ],
   Overlay,
 };

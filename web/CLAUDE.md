@@ -1,18 +1,16 @@
 # LLOD Holster Workshop Rules
 
-## Coordinate System (Viewer)
-- **X-Axis:** Length of the gun.
-- **Positive X (+X):** Muzzle side (Right side of screen).
-- **Negative X (-X):** Grip / Holster Entrance side (Left side of screen).
-- **Animation:** 3D Scan enters from Left (-X) and moves Right (+X), plunging into the mold.
+## Coordinate Systems & Synchronization (CRITICAL)
+- **Viewer Space (Frontend):** Muzzle is +X, Grip is -X. (Rotated 180° for user comfort).
+- **Aligned Space (Backend):** Muzzle is -X, Grip is +X. (Standard calculation frame).
+- **Automated Flip:** The pipeline automatically flips incoming feature coordinates ([x, y, z] -> [-x, y, -z]) to bridge these spaces.
 
-## Universal Carver Rule (CRITICAL)
-- **World Space:** +X is Muzzle, -X is Grip.
-- **Voxel Space:** Index 0 is the ENTRANCE (Grip). The grid is reversed.
-- **Conversion Math:** 
-    - `index_i = (insertion_vox - 1) - (world_x - origin_x) / pitch`
-    - `world_x = origin_x + (insertion_vox - 1 - index_i) * pitch`
-- **Synchronization:** The `overlay.tsx` (Three.js) and `apply.py` (Python) MUST use these exact mappings to ensure wireframes match physical carving.
+## Universal Carver Rule
+- **Voxel Grid:** Index 0 is always the ENTRANCE (Grip).
+- **Direction:** To create a draw path, always carve from **index 0** (the entrance) to the feature's tagged location.
+- **Conversion Math (Aligned Space):** 
+    - `index_i = (insertion_vox - 1) - (world_x - min_x) / pitch`
+    - `world_x = min_x + (insertion_vox - 1 - index_i) * pitch`
 
 ## Planar Override Principle (For Additive Features)
 - **Problem:** Growing geometry relative to the gun surface inherits the scan's noise/texture.

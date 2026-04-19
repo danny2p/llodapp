@@ -21,18 +21,23 @@ Always use the shared FLF logic to anchor your geometry.
 
 ### 2. The X-Axis Flip (CRITICAL)
 The core mold-maker pipeline "sweeps" the gun silhouette. This process **reverses the X-axis** in the voxel grid.
-- **Holster Entrance (Grip):** Is at Voxel Index `i = 0`.
-- **Muzzle Tip:** Is at Voxel Index `i = insertion_vox - 1`.
+
+#### Backend Aligned Space (Standard):
+- **Muzzle:** -X (minimum world coordinate).
+- **Holster Entrance (Grip):** +X (maximum world coordinate).
+- **Voxel Index 0:** Grip side (Entrance).
+- **Voxel Index high:** Muzzle side.
 
 #### Conversion Math:
-When iterating through voxels in `apply.py`, you **must** map the current index `i` to the world `x` coordinate using this formula:
 ```python
-# SWEPT INDEX -> WORLD X
-world_x = origin[0] + (insertion_vox - 1 - i) * pitch
+# SWEPT INDEX i -> WORLD X
+world_x = min_x + (insertion_vox - 1 - i) * pitch
 
-# WORLD X -> SWEPT INDEX (for bounding box optimization)
-index_i = (insertion_vox - 1) - (world_x - origin[0]) / pitch
+# WORLD X -> SWEPT INDEX i
+i = (insertion_vox - 1) - (world_x - min_x) / pitch
 ```
+
+> **Note:** The pipeline automatically flips incoming frontend coordinates to match this Backend Aligned Space.
 
 ### 3. Sub-Voxel Precision
 To avoid "lego-style" steps on your features, do not use binary (on/off) voxel logic.

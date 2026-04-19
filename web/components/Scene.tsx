@@ -66,17 +66,45 @@ type SceneProps = {
 // Overlay component (defined in `web/features/<id>/overlay.tsx`).
 // Marker-only features omit Overlay and render nothing here.
 
-function FeatureOverlays({ featureStates }: { featureStates: FeatureStates }) {
+function FeatureOverlays({
+  featureStates,
+  globalParams,
+}: {
+  featureStates: FeatureStates;
+  globalParams: GlobalParams;
+}) {
   return (
     <group>
       {FEATURES.filter((def) => def.published).map((def) => {
         if (!def.Overlay) return null;
         const state = featureStates[def.id];
         if (!state?.enabled) return null;
-        const flf = flfFromPoints(state.points);
+
+        // For automatic features (0 points), use identity frame at world origin.
+        // For tagged features, derive frame from points.
+        let flf = flfFromPoints(state.points);
+        if (!flf && def.points.length === 0) {
+          flf = {
+            origin: [0, 0, 0],
+            R: [
+              [1, 0, 0],
+              [0, 1, 0],
+              [0, 0, 1],
+            ],
+          };
+        }
+
         if (!flf) return null;
         const Overlay = def.Overlay;
-        return <Overlay key={def.id} def={def} state={state} flf={flf} />;
+        return (
+          <Overlay
+            key={def.id}
+            def={def}
+            state={state}
+            flf={flf}
+            globalParams={globalParams}
+          />
+        );
       })}
     </group>
   );
@@ -786,7 +814,10 @@ function LoadedScene(props: SceneProps) {
             onTagPoint={onTagPoint}
             gunColor={globalParams.gunColor}
           />
-          <FeatureOverlays featureStates={featureStates} />
+          <FeatureOverlays
+            featureStates={featureStates}
+            globalParams={globalParams}
+          />
         </>
       )}
 
