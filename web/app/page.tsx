@@ -485,7 +485,7 @@ export default function Page() {
             />
 
             {/* PARAMETERS */}
-            <Panel title="Fabrication Parameters" id="§ FAB.PARAMS">
+            <Panel title="Processing Parameters" id="§ PROC.PARAMS">
               <ParamPanel
                 params={params}
                 update={updateParam}
@@ -927,7 +927,7 @@ function FeatureTagger({
         onClick={onGenerate}
         icon={<Zap size={12} />}
       >
-        Initiate Fabrication
+        Create Split Molds
       </Button>
     </div>
   );
@@ -1016,13 +1016,13 @@ function ProcessingStatus({ fileName }: { fileName: string | null }) {
       "ransac slide detection :: locked",
       "mabr rotation :: aligned",
       "sweeping occupancy along +X axis...",
-      "marching cubes :: extracting iso-surface",
+      "marching cubes :: exporting iso-surface",
       "taubin smoothing :: 10 iterations",
       "decimating to target face count...",
       "retention SDF :: carving indent",
       "slide release clearance :: channeling",
       "split plane :: z=0 earcut cap",
-      "spooling halves to disk...",
+      "creating geometry...",
     ],
     [fileName]
   );
@@ -1032,7 +1032,7 @@ function ProcessingStatus({ fileName }: { fileName: string | null }) {
         <ScanReticle size={32} />
         <div className="flex flex-col">
           <span className="font-display text-[11px] uppercase tracking-widest text-[var(--hud-amber-bright)] hud-glow-amber">
-            Fabrication Active
+            Processing Active
           </span>
           <span className="font-mono text-[10px] text-[var(--hud-text-dim)]">
             Do not interrupt pipeline.
