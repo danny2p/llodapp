@@ -18,6 +18,7 @@ corrects a 25-degree CCW error.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -34,6 +35,7 @@ from features_loader import load_appliers
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = Path(__file__).resolve().parent / "out"
+CACHE_DIR = Path(__file__).resolve().parent / "cache" / "prep"
 DEFAULT_INPUT_STL = PROJECT_DIR / "sig.stl"
 
 VOXEL_PITCH_MM = 0.5
@@ -260,6 +262,59 @@ def cavity_to_mesh(cavity: np.ndarray, origin: np.ndarray, pitch: float,
     return m
 
 
+# ────────────────────────────────────────────────────────────────────
+# Prep-pipeline cache
+#
+# Alignment + voxelization + sweep + TG detection are the 80% of wall time
+# and depend only on (input STL, voxel pitch, rotate_z, mirror). The feature
+# loop and mesh extraction are the cheap tail. Cache the prep output so
+# feature-slider tweaks on the same scan skip straight to carving.
+# ────────────────────────────────────────────────────────────────────
+
+def _hash_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def _cache_key(input_path: Path, voxel_pitch: float, rotate_z_deg: float, mirror: bool) -> str:
+    mir = "1" if mirror else "0"
+    return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}"
+
+
+def _load_prep_cache(cache_base: Path, key: str):
+    entry = cache_base / key
+    if not (entry / "ok").exists():
+        return None
+    meta = json.loads((entry / "meta.json").read_text())
+    data = np.load(entry / "grids.npz")
+    cavity = data["cavity"]
+    origin = data["origin"]
+    insertion_vox = int(meta["insertion_vox"])
+    tg = meta.get("tg")
+    if tg is not None:
+        tg = {k: (np.asarray(v) if isinstance(v, list) else v) for k, v in tg.items()}
+    aligned = trimesh.load_mesh(entry / "aligned.stl", process=True)
+    return aligned, cavity, origin, insertion_vox, tg
+
+
+def _save_prep_cache(cache_base: Path, key: str, aligned, cavity, origin, insertion_vox, tg) -> None:
+    entry = cache_base / key
+    entry.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(entry / "grids.npz", cavity=cavity, origin=origin)
+    tg_json = None
+    if tg is not None:
+        tg_json = {k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in tg.items()}
+    (entry / "meta.json").write_text(json.dumps({
+        "insertion_vox": insertion_vox,
+        "tg": tg_json,
+    }))
+    aligned.export(entry / "aligned.stl")
+    (entry / "ok").write_text("ok")  # marker; half-written entries have no "ok"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", type=str, default=str(DEFAULT_INPUT_STL),
@@ -284,6 +339,11 @@ def main() -> None:
     parser.add_argument("--features-state", type=str, default=None,
                         help="Path to JSON FeatureStates from the frontend registry. "
                              "Each enabled entry with a tagged point fires its plugin's apply().")
+    parser.add_argument("--cache-dir", type=str, default=None,
+                        help="Directory for the prep-pipeline cache (alignment + voxel grid + tg). "
+                             f"Default: {CACHE_DIR}.")
+    parser.add_argument("--no-cache", action="store_true",
+                        help="Skip the prep cache: always re-run alignment + voxelization.")
     args = parser.parse_args()
 
     input_path = Path(args.input).resolve()
@@ -300,41 +360,73 @@ def main() -> None:
 
     console = Console()
     console.print(f"input: {input_path.relative_to(PROJECT_DIR)}")
-    raw: trimesh.Trimesh = trimesh.load_mesh(input_path, process=True)
-    raw.merge_vertices()
-    console.rule("Load")
-    console.print(f"raw: {len(raw.faces):,} faces, bbox {raw.bounds[1] - raw.bounds[0]}")
-
-    console.rule("Detect slide sides (Z axis)")
-    small = decimate(raw, DECIMATE_FOR_RANSAC)
-    z_axis = find_slide_normal(small, console)
-    console.print(f"Z (thickness) = {z_axis.round(3)}")
-
-    console.rule("MABR in-plane rotation (X axis)")
-    R, centroid = build_rotation(raw, z_axis, console)
-    aligned = apply_rotation(raw, R, centroid)
-    console.print(f"aligned bbox: {aligned.bounds[1] - aligned.bounds[0]}")
-
-    if args.rotate_z_deg != 0.0:
-        console.rule(f"Manual correction: rotate {args.rotate_z_deg:+.1f} deg around Z")
-        aligned = rotate_around_z(aligned, args.rotate_z_deg)
-        console.print(f"post-correction bbox: {aligned.bounds[1] - aligned.bounds[0]}")
-
-    if args.mirror:
-        console.rule("Mirror across XY plane")
-        v = aligned.vertices.copy()
-        v[:, 2] = -v[:, 2]
-        faces = aligned.faces[:, ::-1]  # reverse winding to keep normals outward
-        aligned = trimesh.Trimesh(vertices=v, faces=faces, process=True)
-        aligned.merge_vertices()
-
-    aligned = orient_muzzle_low(aligned)
-    aligned = normalize_y_orientation(aligned, console)
-    console.print(f"after orientation normalization: bbox {aligned.bounds[1] - aligned.bounds[0]}")
 
     suffix = f"_rz{int(args.rotate_z_deg)}" if args.rotate_z_deg else ""
     if args.mirror:
         suffix += "_mir"
+
+    cache_base = Path(args.cache_dir).resolve() if args.cache_dir else CACHE_DIR
+    cache_key = _cache_key(input_path, args.voxel_pitch, args.rotate_z_deg, args.mirror)
+    cached = None if args.no_cache else _load_prep_cache(cache_base, cache_key)
+
+    if cached is not None:
+        console.rule("Prep cache hit")
+        aligned, cavity, origin, insertion_vox, tg = cached
+        console.print(f"key: {cache_key}  ({cache_base})")
+        console.print(f"aligned: {len(aligned.faces):,} faces; cavity: {cavity.shape}; tg: {'yes' if tg else 'no'}")
+    else:
+        raw: trimesh.Trimesh = trimesh.load_mesh(input_path, process=True)
+        raw.merge_vertices()
+        console.rule("Load")
+        console.print(f"raw: {len(raw.faces):,} faces, bbox {raw.bounds[1] - raw.bounds[0]}")
+
+        console.rule("Detect slide sides (Z axis)")
+        small = decimate(raw, DECIMATE_FOR_RANSAC)
+        z_axis = find_slide_normal(small, console)
+        console.print(f"Z (thickness) = {z_axis.round(3)}")
+
+        console.rule("MABR in-plane rotation (X axis)")
+        R, centroid = build_rotation(raw, z_axis, console)
+        aligned = apply_rotation(raw, R, centroid)
+        console.print(f"aligned bbox: {aligned.bounds[1] - aligned.bounds[0]}")
+
+        if args.rotate_z_deg != 0.0:
+            console.rule(f"Manual correction: rotate {args.rotate_z_deg:+.1f} deg around Z")
+            aligned = rotate_around_z(aligned, args.rotate_z_deg)
+            console.print(f"post-correction bbox: {aligned.bounds[1] - aligned.bounds[0]}")
+
+        if args.mirror:
+            console.rule("Mirror across XY plane")
+            v = aligned.vertices.copy()
+            v[:, 2] = -v[:, 2]
+            faces = aligned.faces[:, ::-1]  # reverse winding to keep normals outward
+            aligned = trimesh.Trimesh(vertices=v, faces=faces, process=True)
+            aligned.merge_vertices()
+
+        aligned = orient_muzzle_low(aligned)
+        aligned = normalize_y_orientation(aligned, console)
+        console.print(f"after orientation normalization: bbox {aligned.bounds[1] - aligned.bounds[0]}")
+
+        console.rule("Voxelize + sweep")
+        occupancy, origin = voxelize_filled(aligned, args.voxel_pitch)
+
+        # Pad the voxel grid in all dimensions to provide headroom for
+        # offset relief channels and ensure clean mesh end-caps.
+        pad_mm = 15.0
+        pad_vox = int(np.ceil(pad_mm / args.voxel_pitch))
+        occupancy = np.pad(occupancy, ((pad_vox, pad_vox), (pad_vox, pad_vox), (pad_vox, pad_vox)), mode="constant", constant_values=0)
+        origin -= pad_vox * args.voxel_pitch
+
+        console.print(f"voxel grid: {occupancy.shape}, {int(occupancy.sum()):,} filled")
+        insertion_vox = int(round(INSERTION_DEPTH_MM / args.voxel_pitch))
+        cavity = sweep_cavity(occupancy, insertion_vox)
+
+        tg = detect_trigger_guard(occupancy, origin, args.voxel_pitch, console)
+
+        if not args.no_cache:
+            _save_prep_cache(cache_base, cache_key, aligned, cavity, origin, insertion_vox, tg)
+            console.print(f"cached prep under {cache_key}")
+
     aligned_out = out_dir / f"{stem}_mabr_aligned{suffix}.stl"
     aligned.export(aligned_out)
     console.print(f"wrote {aligned_out.name}  faces={len(aligned.faces):,}")
@@ -348,26 +440,9 @@ def main() -> None:
             aligned.export(gun_dec_out)
         console.print(f"wrote {gun_dec_out.name} (target {args.gun_decim_target})")
 
-    console.rule("Voxelize + sweep")
-    occupancy, origin = voxelize_filled(aligned, args.voxel_pitch)
-    
-    # Pad the voxel grid in all dimensions to provide headroom for 
-    # offset relief channels and ensure clean mesh end-caps.
-    pad_mm = 15.0
-    pad_vox = int(np.ceil(pad_mm / args.voxel_pitch))
-    # Padding: ((x_min, x_max), (y_min, y_max), (z_min, z_max))
-    # We pad X now as well to ensure the grip-end face is closed cleanly.
-    occupancy = np.pad(occupancy, ((pad_vox, pad_vox), (pad_vox, pad_vox), (pad_vox, pad_vox)), mode="constant", constant_values=0)
-    origin -= pad_vox * args.voxel_pitch
-    
-    console.print(f"voxel grid: {occupancy.shape}, {int(occupancy.sum()):,} filled")
-    insertion_vox = int(round(INSERTION_DEPTH_MM / args.voxel_pitch))
-    cavity = sweep_cavity(occupancy, insertion_vox)
-
     cavity_origin = origin
-    console.rule("Detect / Use features")
+    console.rule("Features")
 
-    tg = detect_trigger_guard(occupancy, origin, args.voxel_pitch, console)
     if tg is not None:
         # Persist TG anchor so the UI can pre-fill the retention overlay
         # before the pipeline runs end-to-end.

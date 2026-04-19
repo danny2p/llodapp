@@ -3,6 +3,7 @@
 *.ply
 *.nc
 python-proto/out/
+python-proto/cache/
 
 # Python
 __pycache__/
