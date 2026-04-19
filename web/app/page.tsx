@@ -406,7 +406,9 @@ export default function Page() {
               setGeneratedGlobalParams(globalParams);
               setGeneratedFeatureStates(featureStates);
               setGeneratedFileName(uploadedFile.name);
-              window.setTimeout(() => setStep(3), 1000);
+              // Allow 3 seconds for the 'plunge and reveal' animation to complete 
+              // before transitioning to the split-half view.
+              window.setTimeout(() => setStep(3), 3000);
             } else if (msg.type === "error") {
               throw new Error(
                 msg.detail.stderr || `Error ${msg.detail.code} in pipeline`

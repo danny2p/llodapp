@@ -441,6 +441,7 @@ function Plug({
           opacity={0.6}
           side={THREE.DoubleSide}
           blending={THREE.AdditiveBlending}
+          depthWrite={false}
         />
       </mesh>
 
@@ -679,6 +680,7 @@ function ProcessingSimulation({
 
     if (scanPlaneRef.current) {
       scanPlaneRef.current.position.x = scanX;
+      scanPlaneRef.current.rotation.set(0, Math.PI / 2, 0);
       const fade = Math.sin(t * Math.PI);
       (scanPlaneRef.current.material as THREE.MeshBasicMaterial).opacity = 0.2 + fade * 0.5;
       
@@ -724,6 +726,7 @@ function ProcessingSimulation({
           opacity={0.6}
           side={THREE.DoubleSide}
           blending={THREE.AdditiveBlending}
+          depthWrite={false}
         />
       </mesh>
     </group>
