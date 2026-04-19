@@ -54,14 +54,35 @@ npm run dev
 
 Open `http://localhost:3000` in your browser.
 
-## Project Structure
+## Deployment
 
-- `python-proto/`: Core Python pipeline and FastAPI server.
-    - `prototype_v11_mabr.py`: The main processing engine.
-    - `api.py`: FastAPI endpoints for alignment, processing, and merged exports.
-    - `merge_accessories.py`: Utility for transforming and joining STLs.
-    - `split_plug.py`: Slices the unified mold into left/right halves.
-- `web/`: Next.js web application.
-    - `app/page.tsx`: Main UI and state management.
-    - `components/Scene.tsx`: 3D viewer logic and feature overlays.
-- `accessories/`: Folder for accessory STL files available to the UI.
+### Prerequisites (DigitalOcean Droplet)
+- **Ubuntu 24.04**
+- **Min 8GB RAM** (high-res voxelization is memory intensive)
+- A **domain name** pointed to your Droplet IP.
+
+### Deployment with SSL (using Caddy)
+
+1.  **Install Docker**:
+    ```bash
+    curl -fsSL https://get.docker.com -o get-docker.sh
+    sudo sh get-docker.sh
+    ```
+2.  **Clone code**:
+    ```bash
+    git clone <your-repo-url> llod-maker
+    cd llod-maker
+    ```
+3.  **Configure**:
+    - Edit `Caddyfile`: Replace `yourdomain.com` with your domain and `your@email.com` with your email.
+    - Edit `docker-compose.yml`: Replace `https://yourdomain.com` with your actual URL.
+4.  **Open Firewall**:
+    ```bash
+    sudo ufw allow 80/tcp
+    sudo ufw allow 443/tcp
+    sudo ufw reload
+    ```
+5.  **Deploy**:
+    ```bash
+    sudo docker compose up -d --build
+    ```

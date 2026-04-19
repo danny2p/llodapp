@@ -1,0 +1,13 @@
+{
+    email your@email.com
+}
+
+yourdomain.com {
+    # Forward all /api and /jobs requests to the backend
+    reverse_proxy /api/* backend:8000
+    reverse_proxy /jobs/* backend:8000
+    reverse_proxy /accessories/* backend:8000
+
+    # Forward everything else to the frontend
+    reverse_proxy frontend:3000
+}
