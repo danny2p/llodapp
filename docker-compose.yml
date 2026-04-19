@@ -21,6 +21,7 @@ services:
     volumes:
       - ./python-proto/jobs:/app/jobs
       - ./accessories:/app/accessories
+      - ./web/features:/web/features
     restart: always
 
   frontend:

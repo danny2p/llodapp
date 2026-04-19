@@ -54,4 +54,6 @@ def load_appliers(features_dir: Path | None = None) -> dict[str, ApplyFn]:
                 f"{apply_path} must export a callable named `apply`"
             )
         appliers[child.name] = fn
+    
+    print(f"Loaded {len(appliers)} feature appliers: {list(appliers.keys())}", flush=True)
     return appliers
