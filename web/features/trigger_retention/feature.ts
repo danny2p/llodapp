@@ -5,9 +5,10 @@ const feature: FeatureDef = {
   id: "trigger_retention",
   label: "Trigger Retention",
   description: "Triangle indent behind trigger-guard front edge.",
-  color: "#FBBF24",
+  color: "#fde047",
   published: true,
   enabledByDefault: true,
+  intent: "subtractive",
   points: [
     {
       id: "anchor",

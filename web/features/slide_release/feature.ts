@@ -5,9 +5,10 @@ const feature: FeatureDef = {
   id: "slide_release",
   label: "Slide Release",
   description: "Clearance channel so the slide release can clear the mold.",
-  color: "#22D3EE",
+  color: "#5EEAD4",
   published: true,
   enabledByDefault: true,
+  intent: "additive",
   points: [
     {
       id: "anchor",

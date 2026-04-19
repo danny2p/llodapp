@@ -50,18 +50,13 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
 
     # 4. Carving Loop
     # We iterate over a bounding box that covers all 3 circles
-    total_len = 2 * spacing + outer_rad * 2
     radius_vox = int(np.ceil((outer_rad + 2) / pitch))
     
-    # Bounding box calculation for the whole feature
-    # (Rough but safe)
     all_x = [c[0] for c in centers_world]
     all_y = [c[1] for c in centers_world]
-    
     x_min, x_max = min(all_x) - outer_rad, max(all_x) + outer_rad
     y_min, y_max = min(all_y) - outer_rad, max(all_y) + outer_rad
     
-    # Map World X to swept indices
     i_min = int(round((insertion_vox - 1) - (x_max - origin[0]) / pitch))
     i_max = int(round((insertion_vox - 1) - (x_min - origin[0]) / pitch))
     j0 = int(round((y_min - origin[1]) / pitch))
@@ -70,12 +65,9 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     i0, i1 = max(0, i_min - 2), min(nx - 1, i_max + 2)
     j0, j1 = max(0, j0 - 2), min(ny - 1, j1 + 2)
 
-    height_vox = height / pitch
     count_added = 0
-    count_removed = 0
 
     for i in range(i0, i1 + 1):
-        # Swept index -> World X
         gx = origin[0] + (insertion_vox - 1 - i) * pitch
         for j in range(j0, j1 + 1):
             gy = origin[1] + j * pitch
@@ -90,54 +82,59 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
             if d_min > outer_rad + pitch:
                 continue
                 
-            # Density for outer circle AA
+            # 1. Determine local max height for this voxel
+            # Outer boss smoothing
             outer_cov = 1.0
             if d_min > outer_rad - pitch:
                 outer_cov = max(0.0, (outer_rad - d_min) / pitch)
             
-            # Density for inner circle (hole)
+            # Inner pin smoothing (additive, sits on top and goes higher)
             inner_cov = 0.0
             if d_min < inner_rad + pitch:
-                if d_min < inner_rad:
+                if d_min < inner_rad - pitch:
                     inner_cov = 1.0
                 else:
-                    inner_cov = max(0.0, (inner_rad + pitch - d_min) / pitch)
-
-            if outer_cov <= 0:
+                    # Smoothing transition between inner and outer zones
+                    inner_cov = max(0.0, (inner_rad - d_min) / pitch + 1.0) # rough but works
+            
+            # Final allowed height at this voxel:
+            # - If in inner circle: height + 1mm
+            # - If in outer circle: height
+            # We use max height logic with smoothing
+            if d_min < inner_rad:
+                target_height = height + 1.0
+                edge_dens = 1.0 # inner core is solid
+            elif d_min < outer_rad:
+                # In the 'outer' ring
+                target_height = height
+                # Smooth the inner wall of the ring if we want, 
+                # but for an additive boss we'll just step up.
+                edge_dens = outer_cov
+            else:
                 continue
+
+            if edge_dens <= 0: continue
 
             col = cavity_bin[i, j, :]
             if not col.any(): continue
             zs = np.where(col)[0]
             z_surf = int(zs.max()) if is_positive_side else int(zs.min())
             
-            # 1. Add boss material
-            for v_off in range(int(np.ceil(height_vox)) + 1):
-                dens = outer_cov
-                if v_off > height_vox: continue
-                if v_off + 1 > height_vox:
-                    dens *= (height_vox - v_off)
+            # Add material upward from the surface
+            h_vox = target_height / pitch
+            for v_off in range(int(np.ceil(h_vox)) + 1):
+                v_dens = edge_dens
+                if v_off > h_vox: continue
+                if v_off + 1 > h_vox:
+                    v_dens *= (h_vox - v_off)
                 
                 k = z_surf + v_off if is_positive_side else z_surf - v_off
                 if 0 <= k < nz:
-                    if dens > cavity_f[i, j, k]:
-                        cavity_f[i, j, k] = dens
+                    if v_dens > cavity_f[i, j, k]:
+                        cavity_f[i, j, k] = v_dens
                         count_added += 1
 
-            # 2. Subtract hole material
-            # Holes go deeper than the boss to ensure they are clear
-            if inner_cov > 0:
-                hole_depth_vox = height_vox + 2 # slightly deeper
-                for v_off in range(int(np.ceil(hole_depth_vox)) + 1):
-                    k = z_surf + v_off if is_positive_side else z_surf - v_off
-                    if 0 <= k < nz:
-                        # Subtraction: reduce density
-                        new_dens = max(0.0, cavity_f[i, j, k] - inner_cov)
-                        if new_dens < cavity_f[i, j, k]:
-                            cavity_f[i, j, k] = new_dens
-                            count_removed += 1
-
     if console:
-        console.print(f"  [blue]slide_circles[/blue]: added {count_added:,} voxels, removed {count_removed:,} for holes")
+        console.print(f"  [blue]slide_circles[/blue]: added {count_added:,} voxels in additive ring pattern")
         
     return cavity_f, origin

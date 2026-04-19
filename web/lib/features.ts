@@ -50,6 +50,8 @@ export type FeaturePointSlot = {
 
 export type FeatureValue = number | boolean | string;
 
+export type FeatureIntent = "additive" | "subtractive" | "marker";
+
 export type FeatureState = {
   enabled: boolean;
   points: (Vec3 | null)[];
@@ -88,6 +90,7 @@ export type FeatureDef = {
   enabledByDefault: boolean;
   points: FeaturePointSlot[];
   params: FeatureParam[];
+  intent: FeatureIntent;
   // Optional R3F renderer. Marker-only features (no preview geometry) omit it.
   Overlay?: ComponentType<FeatureOverlayProps>;
 };
