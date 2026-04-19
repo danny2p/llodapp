@@ -56,6 +56,7 @@ type SceneProps = {
   onTagFeature: (index: number, coords: [number, number, number]) => void;
   placedAccessories: PlacedAccessory[];
   activeAccessoryId: string | null;
+  onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSetActiveAccessory: (id: string | null) => void;
   params?: any; // To pass dimensions for overlays
 };
@@ -338,6 +339,7 @@ function MoldAssets({
           plug={plug}
           accessories={placedAccessories}
           activeAccessoryId={activeAccessoryId}
+          onUpdateAccessory={onUpdateAccessory}
           onSelectAccessory={onSetActiveAccessory}
         />
       )}
@@ -349,10 +351,12 @@ function Accessory({
   data,
   isActive,
   onSelect,
+  onUpdate,
 }: {
   data: PlacedAccessory;
   isActive: boolean;
   onSelect: () => void;
+  onUpdate: (id: string, updates: Partial<PlacedAccessory>) => void;
 }) {
   const stl = useLoader(STLLoader, `${API_BASE}/accessories/${data.name}`);
   const [hovered, setHovered] = useState(false);
@@ -399,6 +403,7 @@ function Plug({
   plug,
   accessories,
   activeAccessoryId,
+  onUpdateAccessory,
   onSelectAccessory,
 }: {
   step: Step;
@@ -406,6 +411,7 @@ function Plug({
   plug: PlugData;
   accessories: PlacedAccessory[];
   activeAccessoryId: string | null;
+  onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSelectAccessory: (id: string | null) => void;
 }) {
   const plugMeshRef = useRef<THREE.Mesh>(null);
@@ -537,6 +543,7 @@ function Plug({
               data={acc}
               isActive={activeAccessoryId === acc.id}
               onSelect={() => onSelectAccessory(acc.id)}
+              onUpdate={onUpdateAccessory}
             />
           ))}
       </group>
@@ -551,6 +558,7 @@ function Plug({
               data={acc}
               isActive={activeAccessoryId === acc.id}
               onSelect={() => onSelectAccessory(acc.id)}
+              onUpdate={onUpdateAccessory}
             />
           ))}
       </group>
@@ -671,7 +679,20 @@ function CameraController({ isFlat }: { isFlat: boolean }) {
 }
 
 function LoadedScene(props: SceneProps) {
-  const { step, viewMode, assets, alignedGunUrl, featurePoints, activeFeatureIndex, onTagFeature, params } = props;
+  const {
+    step,
+    viewMode,
+    assets,
+    alignedGunUrl,
+    featurePoints,
+    activeFeatureIndex,
+    onTagFeature,
+    placedAccessories,
+    activeAccessoryId,
+    onUpdateAccessory,
+    onSetActiveAccessory,
+    params,
+  } = props;
 
   return (
     <>
