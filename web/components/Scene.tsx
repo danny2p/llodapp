@@ -291,11 +291,12 @@ function Plug({
         metalness: 0.45,
         roughness: 0.35,
         clippingPlanes: [plugClipPlane],
-        emissive: "#062029",
-        emissiveIntensity: 0.35,
+        emissive: "#5EEAD4",
+        emissiveIntensity: 0,
       }),
     [plugClipPlane]
   );
+  const scanPlaneRef = useRef<THREE.Mesh>(null);
   const gunMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
@@ -327,7 +328,7 @@ function Plug({
     []
   );
 
-  useFrame((_, delta) => {
+  useFrame(({ clock }, delta) => {
     const modeChanged = lastViewModeRef.current !== viewMode;
     const stepChanged = lastStepRef.current !== step;
 
@@ -342,6 +343,7 @@ function Plug({
 
     if (plugMeshRef.current) plugMeshRef.current.visible = step === 2;
     if (gunRef.current) gunRef.current.visible = step === 2;
+    if (scanPlaneRef.current) scanPlaneRef.current.visible = step === 2;
 
     const showLeft = step === 3 && (viewMode === "unified" || viewMode === "left");
     const showRight = step === 3 && (viewMode === "unified" || viewMode === "right");
@@ -355,6 +357,15 @@ function Plug({
       if (gunRef.current) gunRef.current.position.x = gunX;
       const muzzleWorldX = gunX + plug.gunLeadingX;
       plugClipPlane.constant = muzzleWorldX;
+
+      if (scanPlaneRef.current) {
+        scanPlaneRef.current.position.x = muzzleWorldX;
+      }
+
+      // Fast pulse for active indication
+      const pulse = (Math.sin(clock.getElapsedTime() * 10) + 1) / 2;
+      plugMaterial.emissiveIntensity = 0.1 + pulse * 0.5;
+
       const fadeStart = 0.75;
       gunMaterial.opacity =
         t < fadeStart ? 1 : Math.max(0, 1 - (t - fadeStart) / (1 - fadeStart));
@@ -389,8 +400,26 @@ function Plug({
 
   return (
     <group>
-      <mesh ref={plugMeshRef} geometry={plug.full} material={plugMaterial} castShadow receiveShadow />
+      <mesh
+        ref={plugMeshRef}
+        geometry={plug.full}
+        material={plugMaterial}
+        castShadow
+        receiveShadow
+      />
       <mesh ref={gunRef} geometry={plug.gun} material={gunMaterial} castShadow />
+
+      {/* Laser Scanning Plane */}
+      <mesh ref={scanPlaneRef} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[plug.size.z * 2.5, plug.size.y * 1.5]} />
+        <meshBasicMaterial
+          color="#5EEAD4"
+          transparent
+          opacity={0.6}
+          side={THREE.DoubleSide}
+          blending={THREE.AdditiveBlending}
+        />
+      </mesh>
 
       <group ref={leftGroupRef}>
         <mesh geometry={plug.left} material={halfMaterial} castShadow receiveShadow />
@@ -433,29 +462,53 @@ function ClayBlock({
   sizeHint: THREE.Vector3;
 }) {
   const ref = useRef<THREE.Mesh>(null);
-  useFrame((_, delta) => {
+  const lightRef = useRef<THREE.PointLight>(null);
+
+  useFrame(({ clock }, delta) => {
     if (!ref.current) return;
     const mat = ref.current.material as THREE.MeshStandardMaterial;
-    const target = visible ? 0.35 : 0;
+    const target = visible ? 0.3 : 0; // Slightly more transparent
     mat.opacity = THREE.MathUtils.lerp(mat.opacity, target, delta * 3);
     ref.current.visible = mat.opacity > 0.01;
+
+    if (visible) {
+      // Pulsing emissive effect
+      const pulse = (Math.sin(clock.getElapsedTime() * 4) + 1) / 2;
+      mat.emissiveIntensity = 0.2 + pulse * 0.4;
+      if (lightRef.current) {
+        lightRef.current.intensity = 0.5 + pulse * 1.5;
+      }
+    }
   });
+
   const w = sizeHint.x;
   const h = sizeHint.y * 1.4;
   const d = sizeHint.z * 2.2;
+
   return (
-    <mesh ref={ref} position={[0, 0, 0]}>
-      <boxGeometry args={[w, h, d]} />
-      <meshStandardMaterial
-        color="#0E2333"
-        transparent
-        opacity={0}
-        roughness={0.7}
-        metalness={0.15}
-        emissive="#052230"
-        emissiveIntensity={0.5}
-      />
-    </mesh>
+    <group position={[0, 0, 0]}>
+      <mesh ref={ref}>
+        <boxGeometry args={[w, h, d]} />
+        <meshStandardMaterial
+          color="#d1d5db" // Lighter limestone/clay color
+          transparent
+          opacity={0}
+          roughness={0.8}
+          metalness={0.1}
+          emissive="#5eead4" // Teal emissive pulse
+          emissiveIntensity={0}
+        />
+      </mesh>
+      {visible && (
+        <pointLight
+          ref={lightRef}
+          position={[0, 0, 0]}
+          color="#5eead4"
+          distance={w}
+          intensity={0}
+        />
+      )}
+    </group>
   );
 }
 

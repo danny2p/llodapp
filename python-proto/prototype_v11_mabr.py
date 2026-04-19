@@ -225,9 +225,28 @@ def make_axis_gizmos(length_mm: float = 80.0, thickness_mm: float = 3.0) -> trim
 
 
 def voxelize_filled(mesh: trimesh.Trimesh, pitch: float) -> tuple[np.ndarray, np.ndarray]:
-    vox = mesh.voxelized(pitch=pitch).fill()
-    occupancy = vox.matrix.copy()
-    origin = np.asarray(vox.transform)[:3, 3].astype(float)
+    # Open3D's C++ surface rasterizer + scipy fill. ~6x faster than trimesh's
+    # voxelize_subdivide Python face-bisection loop at fine pitches.
+    from scipy.ndimage import binary_fill_holes
+
+    tm = o3d.geometry.TriangleMesh(
+        vertices=o3d.utility.Vector3dVector(mesh.vertices),
+        triangles=o3d.utility.Vector3iVector(mesh.faces),
+    )
+    vg = o3d.geometry.VoxelGrid.create_from_triangle_mesh(tm, voxel_size=pitch)
+    voxels = vg.get_voxels()
+    if not voxels:
+        return np.zeros((1, 1, 1), dtype=bool), np.zeros(3)
+    idx = np.array([v.grid_index for v in voxels], dtype=np.int64)
+    i_min = idx.min(axis=0)
+    idx -= i_min
+    shape = tuple((idx.max(axis=0) + 1).tolist())
+    surface = np.zeros(shape, dtype=bool)
+    surface[idx[:, 0], idx[:, 1], idx[:, 2]] = True
+    occupancy = binary_fill_holes(surface)
+    # Origin = world-space center of voxel [0,0,0].
+    o3d_origin = np.asarray(vg.origin, dtype=float)
+    origin = o3d_origin + (np.asarray(i_min, dtype=float) + 0.5) * pitch
     return occupancy, origin
 
 
