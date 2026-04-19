@@ -1,8 +1,8 @@
 {
-    email your@email.com
+    email dpfeiffer@gmail.com
 }
 
-yourdomain.com {
+llod.garage.golf {
     # Match any path starting with /api, /jobs, or /accessories
     handle /api* {
         reverse_proxy backend:8000

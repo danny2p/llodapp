@@ -28,7 +28,7 @@ services:
       context: ./web
       args:
         # We use the domain name now
-        - NEXT_PUBLIC_API_BASE=https://yourdomain.com
+        - NEXT_PUBLIC_API_BASE=https://llod.garage.golf
     # Port 3000 is internal only now
     expose:
       - "3000"
