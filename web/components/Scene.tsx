@@ -25,6 +25,13 @@ export type PlacedAccessory = {
   scale: number;
 };
 
+export type TgAnchor = {
+  center: [number, number, number];
+  bbox_min: [number, number, number];
+  bbox_max: [number, number, number];
+  area_mm2: number;
+};
+
 export type SceneAssets = {
   gunUrl: string;
   fullUrl: string;
