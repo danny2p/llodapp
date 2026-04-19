@@ -58,6 +58,20 @@ export type FeatureState = {
 
 export type FeatureStates = Record<string, FeatureState>;
 
+// Global pipeline parameters — not tied to any one feature.
+export type GlobalParams = {
+  voxelPitch: number;
+  smoothSigma: number;
+  smoothIter: number;
+  plugDecimTarget: number;
+  gunDecimTarget: number;
+  mirror: boolean;
+  rotateZDeg: number;
+  gunColor: string;
+  moldColor: string;
+  totalLength: number;
+};
+
 // Props passed to a feature's R3F overlay component.
 export type FeatureOverlayProps = {
   def: FeatureDef;

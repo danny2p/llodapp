@@ -60,6 +60,7 @@ import {
   type SelectParam,
   type ToggleParam,
   type FeatureValue,
+  type GlobalParams,
 } from "@/lib/features";
 import type { Vec3 } from "@/lib/featuresFrame";
 
@@ -72,20 +73,6 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 type ProcessResponse = SceneAssets & {
   jobId: string;
   tgAnchor: TgAnchor | null;
-};
-
-// Global pipeline parameters — not tied to any one feature.
-export type GlobalParams = {
-  voxelPitch: number;
-  smoothSigma: number;
-  smoothIter: number;
-  plugDecimTarget: number;
-  gunDecimTarget: number;
-  mirror: boolean;
-  rotateZDeg: number;
-  gunColor: string;
-  moldColor: string;
-  totalLength: number;
 };
 
 const DEFAULT_GLOBAL_PARAMS: GlobalParams = {
