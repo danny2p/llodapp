@@ -7,10 +7,12 @@ import triggerRetention from "./trigger_retention/feature";
 import slideRelease from "./slide_release/feature";
 import ejectionPort from "./ejection_port/feature";
 import genericCut from "./generic_cut/feature";
+import slideCircles from "./slide_circles/feature";
 
 export const FEATURES: FeatureDef[] = [
   triggerRetention,
   slideRelease,
   ejectionPort,
   genericCut,
+  slideCircles,
 ];
