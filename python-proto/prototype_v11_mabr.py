@@ -188,36 +188,52 @@ def orient_muzzle_low(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     return mesh
 
 
-def normalize_y_orientation(mesh: trimesh.Trimesh, console: Console | None = None) -> trimesh.Trimesh:
-    """Handguns have a long, continuous slide at the top and a shorter grip bottom.
-    We compare the X-span of the top 20% vs the bottom 20% to detect upside-down scans.
+def normalize_y_orientation(mesh: trimesh.Trimesh, console: Console | None = None, manual_features: dict | None = None) -> trimesh.Trimesh:
+    """Ensure the grip faces down (-Y). 
+    If manual features exist, the Trigger Guard is the absolute truth.
+    Otherwise, we use the X-span heuristic.
     """
     ys = mesh.vertices[:, 1]
     y_min, y_max = ys.min(), ys.max()
     y_span = y_max - y_min
+    y_mid = (y_min + y_max) / 2.0
+
+    flip_needed = False
     
-    # Define top and bottom zones
-    top_mask = ys > (y_max - 0.2 * y_span)
-    bot_mask = ys < (y_min + 0.2 * y_span)
+    # 1. Primary Truth: Manual Features
+    if manual_features and "tg_front" in manual_features:
+        tg_y = manual_features["tg_front"][1]
+        # Trigger guard front must be in the bottom half of the gun
+        if tg_y > y_mid:
+            if console: console.print("[yellow]Orientation check: Trigger Guard tag is in upper half. Flipping...[/yellow]")
+            flip_needed = True
     
-    def get_x_span(mask):
-        if not mask.any(): return 0
-        vx = mesh.vertices[mask, 0]
-        return vx.max() - vx.min()
-    
-    t_span = get_x_span(top_mask)
-    b_span = get_x_span(bot_mask)
-    
-    # If the bottom is significantly 'longer' in X than the top, 
-    # it's almost certainly the slide being at the bottom.
-    if b_span > t_span:
-        if console:
-            console.print("[yellow]Vertical flip detected: orienting grip down (-Y)[/yellow]")
-        # Rotate 180 around X: flip Y and Z
+    # 2. Heuristic: X-Span (Slide is longer than grip-bottom)
+    else:
+        # Define top and bottom zones (25% each)
+        top_mask = ys > (y_max - 0.25 * y_span)
+        bot_mask = ys < (y_min + 0.25 * y_span)
+        
+        def get_x_span(mask):
+            if not mask.any(): return 0
+            vx = mesh.vertices[mask, 0]
+            return vx.max() - vx.min()
+        
+        t_span = get_x_span(top_mask)
+        b_span = get_x_span(bot_mask)
+        
+        if b_span > t_span * 1.1: # 10% margin for stability
+            if console: console.print("[yellow]Orientation check: Heuristic detects upside-down scan. Flipping...[/yellow]")
+            flip_needed = True
+
+    if flip_needed:
+        # Rotate 180 around X: flip Y and Z. 
+        # This preserves winding order (right-handedness).
         v = mesh.vertices.copy()
         v[:, 1] = -v[:, 1]
         v[:, 2] = -v[:, 2]
         return trimesh.Trimesh(vertices=v, faces=mesh.faces, process=True)
+    
     return mesh
 
 
@@ -512,7 +528,6 @@ def main() -> None:
     console.rule("MABR in-plane rotation (X axis)")
     R, centroid = build_rotation(raw, z_axis, console)
     aligned = apply_rotation(raw, R, centroid)
-    aligned = normalize_y_orientation(aligned)
     console.print(f"aligned bbox: {aligned.bounds[1] - aligned.bounds[0]}")
 
     if args.rotate_z_deg != 0.0:
@@ -529,8 +544,9 @@ def main() -> None:
         aligned.merge_vertices()
 
     aligned = orient_muzzle_low(aligned)
-    aligned = normalize_y_orientation(aligned, console)
-    console.print(f"after muzzle orient: bbox {aligned.bounds[1] - aligned.bounds[0]}")
+    # Perform exactly one final normalization pass using heuristic or feature truth.
+    aligned = normalize_y_orientation(aligned, console, manual_features=manual_features)
+    console.print(f"after orientation normalization: bbox {aligned.bounds[1] - aligned.bounds[0]}")
 
     suffix = f"_rz{int(args.rotate_z_deg)}" if args.rotate_z_deg else ""
     if args.mirror:
