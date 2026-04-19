@@ -19,6 +19,7 @@ const mono = JetBrains_Mono({
 export const metadata: Metadata = {
   title: "LLOD · HOLSTER WORKSHOP",
   description: "Tactical mold processing console — firearm scan to kydex mold.",
+  robots: "noindex, nofollow",
 };
 
 export default function RootLayout({

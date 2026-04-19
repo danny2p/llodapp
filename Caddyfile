@@ -3,6 +3,10 @@
 }
 
 llod.garage.golf {
+    basicauth {
+        danny $2a$14$DnQQ8.5J7KlGafu31GWzwOuiNFrIiTZIyTt/dHKiQeG2W4AYkPZtK
+    }
+
     # Match any path starting with /api, /jobs, or /accessories
     handle /api* {
         reverse_proxy backend:8000
