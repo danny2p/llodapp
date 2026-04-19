@@ -679,6 +679,7 @@ function LoadedScene(props: SceneProps) {
           activeAccessoryId={activeAccessoryId}
           onUpdateAccessory={onUpdateAccessory}
           onSetActiveAccessory={onSetActiveAccessory}
+          globalParams={globalParams}
         />
       )}
     </>
