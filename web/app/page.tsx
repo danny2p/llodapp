@@ -1035,7 +1035,7 @@ function ProcessingStatus({ fileName }: { fileName: string | null }) {
             Processing Active
           </span>
           <span className="font-mono text-[10px] text-[var(--hud-text-dim)]">
-            Do not interrupt pipeline.
+            Do not leave or refresh page.
           </span>
         </div>
       </div>
