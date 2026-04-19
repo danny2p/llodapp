@@ -43,13 +43,23 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
         centers_world.append(p0 + np.array([rx, ry, 0.0]))
 
     # 3. Determine Side
-    # Use p0[2] to decide if we are on +Z or -Z side
+    # We use a global grid center for the "interior" reference to ensure we fill outward.
     z_mid_vox = nz / 2.0
     k_tag_vox = (p0[2] - origin[2]) / pitch
     is_positive_side = k_tag_vox > z_mid_vox
 
-    # 4. Carving Loop
-    # We iterate over a bounding box that covers all 3 circles
+    # 4. Target Absolute Z Planes (the "ceilings" of the cylinders)
+    # !!! PLANAR OVERRIDE PRINCIPLE !!!
+    # We calculate the exact world Z where the top of the cylinder must be.
+    # We then fill from the gun interior OUT TO this plane. This overwrites
+    # any bumpy gun geometry with a perfectly flat, cad-quality face.
+    outer_z_world = p0[2] + (height if is_positive_side else -height)
+    inner_z_world = p0[2] + ((height + 1.0) if is_positive_side else -(height + 1.0))
+    
+    outer_k_target = (outer_z_world - origin[2]) / pitch
+    inner_k_target = (inner_z_world - origin[2]) / pitch
+
+    # 5. Carving Loop
     radius_vox = int(np.ceil((outer_rad + 2) / pitch))
     
     all_x = [c[0] for c in centers_world]
@@ -72,69 +82,57 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
         for j in range(j0, j1 + 1):
             gy = origin[1] + j * pitch
             
-            # Check distance to each circle center
             d_min = float('inf')
             for cw in centers_world:
                 d = np.sqrt((gx - cw[0])**2 + (gy - cw[1])**2)
-                if d < d_min:
-                    d_min = d
+                if d < d_min: d_min = d
             
             if d_min > outer_rad + pitch:
                 continue
                 
-            # 1. Determine local max height for this voxel
-            # Outer boss smoothing
-            outer_cov = 1.0
-            if d_min > outer_rad - pitch:
-                outer_cov = max(0.0, (outer_rad - d_min) / pitch)
+            # Anti-aliasing / edge smoothing
+            outer_cov = max(0.0, min(1.0, (outer_rad - d_min) / pitch + 1.0)) if d_min > outer_rad - pitch else 1.0
+            inner_cov = max(0.0, min(1.0, (inner_rad - d_min) / pitch + 1.0)) if d_min > inner_rad - pitch else 1.0
             
-            # Inner pin smoothing (additive, sits on top and goes higher)
-            inner_cov = 0.0
+            # Decide which target plane to use for this voxel
             if d_min < inner_rad + pitch:
-                if d_min < inner_rad - pitch:
-                    inner_cov = 1.0
-                else:
-                    # Smoothing transition between inner and outer zones
-                    inner_cov = max(0.0, (inner_rad - d_min) / pitch + 1.0) # rough but works
-            
-            # Final allowed height at this voxel:
-            # - If in inner circle: height + 1mm
-            # - If in outer circle: height
-            # We use max height logic with smoothing
-            if d_min < inner_rad:
-                target_height = height + 1.0
-                edge_dens = 1.0 # inner core is solid
-            elif d_min < outer_rad:
-                # In the 'outer' ring
-                target_height = height
-                # Smooth the inner wall of the ring if we want, 
-                # but for an additive boss we'll just step up.
+                # Use the inner pin height
+                k_target_float = inner_k_target
+                edge_dens = inner_cov
+            elif d_min < outer_rad + pitch:
+                # Use the outer boss height
+                k_target_float = outer_k_target
                 edge_dens = outer_cov
             else:
                 continue
 
             if edge_dens <= 0: continue
 
-            col = cavity_bin[i, j, :]
-            if not col.any(): continue
-            zs = np.where(col)[0]
-            z_surf = int(zs.max()) if is_positive_side else int(zs.min())
-            
-            # Add material upward from the surface
-            h_vox = target_height / pitch
-            for v_off in range(int(np.ceil(h_vox)) + 1):
-                v_dens = edge_dens
-                if v_off > h_vox: continue
-                if v_off + 1 > h_vox:
-                    v_dens *= (h_vox - v_off)
-                
-                k = z_surf + v_off if is_positive_side else z_surf - v_off
-                if 0 <= k < nz:
-                    if v_dens > cavity_f[i, j, k]:
-                        cavity_f[i, j, k] = v_dens
-                        count_added += 1
+            # Fill from the gun interior out to the target plane
+            if is_positive_side:
+                k_start = int(np.floor(z_mid_vox))
+                for k in range(k_start, int(np.ceil(k_target_float)) + 1):
+                    if 0 <= k < nz:
+                        density = edge_dens
+                        if k > k_target_float: continue
+                        if k + 1 > k_target_float:
+                            density *= (k_target_float - k)
+                        if density > cavity_f[i, j, k]:
+                            cavity_f[i, j, k] = density
+                            count_added += 1
+            else:
+                k_start = int(np.ceil(z_mid_vox))
+                for k in range(int(np.floor(k_target_float)), k_start + 1):
+                    if 0 <= k < nz:
+                        density = edge_dens
+                        if k < k_target_float: continue
+                        if k - 1 < k_target_float:
+                            density *= (k - k_target_float)
+                        if density > cavity_f[i, j, k]:
+                            cavity_f[i, j, k] = density
+                            count_added += 1
 
     if console:
-        console.print(f"  [blue]slide_circles[/blue]: added {count_added:,} voxels in additive ring pattern")
+        console.print(f"  [blue]slide_circles[/blue]: added {count_added:,} voxels using absolute planar targeting")
         
     return cavity_f, origin

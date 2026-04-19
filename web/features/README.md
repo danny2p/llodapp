@@ -39,6 +39,12 @@ To avoid "lego-style" steps on your features, do not use binary (on/off) voxel l
 - **Float Densities:** Set `cavity_f[i,j,k]` to fractional values (0.0 to 1.0).
 - **Anti-Aliasing:** Calculate the distance to your feature's edge and use the remainder of the voxel pitch to determine the density. This results in CAD-smooth surfaces even at low voxel resolutions.
 
+### 4. Planar Override Principle
+Most additive features (like bosses or clearance channels) should have perfectly flat outer faces. 
+- **DO NOT** just find the gun surface and add `+N mm`. This will create a bumpy surface if the scan is noisy.
+- **DO** calculate an absolute target Z in world space: `target_z = tagged_z + height`.
+- **DO** fill every voxel from the grid's center-line out to that `target_z`. This "solidifies" the volume and produces a perfectly planar CAD-quality finish.
+
 ## Reference Implementations
 - **trigger_retention:** Standard SDF-based ramped triangle.
 - **slide_release:** Absolute planar targeting with 3D chamfering.
