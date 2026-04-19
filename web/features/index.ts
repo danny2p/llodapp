@@ -8,6 +8,7 @@ import slideRelease from "./slide_release/feature";
 import ejectionPort from "./ejection_port/feature";
 import genericCut from "./generic_cut/feature";
 import slideCircles from "./slide_circles/feature";
+import sightChannel from "./sight_channel/feature";
 
 export const FEATURES: FeatureDef[] = [
   triggerRetention,
@@ -15,4 +16,5 @@ export const FEATURES: FeatureDef[] = [
   ejectionPort,
   genericCut,
   slideCircles,
+  sightChannel,
 ];
