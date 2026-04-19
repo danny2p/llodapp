@@ -7,7 +7,7 @@ const feature: FeatureDef = {
   description: "Additive rectangular ridge to clear iron sights during draw.",
   color: "#5eead4", // Teal (additive)
   published: true,
-  enabledByDefault: false,
+  enabledByDefault: true,
   intent: "additive",
   points: [
     { id: "origin", label: "Front Bottom Edge", hint: "The point where the channel starts (nearest the muzzle)." },

@@ -7,7 +7,7 @@ const feature: FeatureDef = {
   description: "Set of 3 nested additive cylinders. Inner pins protrude 1mm above the outer bosses.",
   color: "#5eead4", // Teal (additive)
   published: true,
-  enabledByDefault: false,
+  enabledByDefault: true,
   intent: "additive",
   points: [
     { id: "start", label: "Starting Point" },
