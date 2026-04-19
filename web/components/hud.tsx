@@ -307,16 +307,16 @@ export function ColorPicker({
           {value}
         </span>
         <div className="relative w-8 h-4 border border-[var(--hud-line-strong)] cursor-pointer overflow-hidden">
+          <div
+            className="absolute inset-0"
+            style={{ backgroundColor: value }}
+          />
           <input
             type="color"
             value={value}
             disabled={disabled}
             onChange={(e) => onChange(e.target.value)}
-            className="absolute -inset-1 w-[200%] h-[200%] cursor-pointer opacity-0"
-          />
-          <div
-            className="absolute inset-0"
-            style={{ backgroundColor: value }}
+            className="absolute -inset-1 w-[200%] h-[200%] cursor-pointer opacity-0 z-10"
           />
         </div>
       </div>
