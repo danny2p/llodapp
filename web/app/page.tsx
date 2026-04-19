@@ -11,12 +11,6 @@ const Scene = dynamic(() => import("@/components/Scene").then((m) => m.Scene), {
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
-const STEP_META: Record<Step, { title: string; subtitle: string }> = {
-  1: { title: "Upload a scan", subtitle: "STL of the firearm you want to mold." },
-  2: { title: "Generating mold", subtitle: "Inserting the scan into clay to carve the cavity." },
-  3: { title: "Splitting model", subtitle: "Separating the mold into left and right halves." },
-};
-
 type ProcessResponse = SceneAssets & {
   jobId: string;
   tgAnchor: TgAnchor | null;
@@ -25,6 +19,7 @@ type ProcessResponse = SceneAssets & {
 type Params = {
   voxelPitch: number;
   smoothSigma: number;
+  smoothIter: number;
   plugDecimTarget: number;
   gunDecimTarget: number;
   mirror: boolean;
@@ -36,12 +31,20 @@ type Params = {
   retentionDepthZ: number;
   retentionYOffset: number;
   retentionRotateDeg: number;
+  retentionCornerRadius: number;
   retentionOneSide: boolean;
+  // Slide Release Blockout
+  srEnabled: boolean;
+  srWidthY: number;
+  srDepthZ: number;
+  srYOffset: number;
+  srZOffset: number;
 };
 
 const DEFAULT_PARAMS: Params = {
   voxelPitch: 0.35,
   smoothSigma: 0.8,
+  smoothIter: 10,
   plugDecimTarget: 30000,
   gunDecimTarget: 60000,
   mirror: false,
@@ -53,7 +56,14 @@ const DEFAULT_PARAMS: Params = {
   retentionDepthZ: 4,
   retentionYOffset: 0,
   retentionRotateDeg: 0,
+  retentionCornerRadius: 2.0,
   retentionOneSide: false,
+  // Slide Release Defaults
+  srEnabled: true,
+  srWidthY: 12,
+  srDepthZ: 6,
+  srYOffset: 0,
+  srZOffset: 0,
 };
 
 const CAMEL_TO_SNAKE = (s: string) =>
@@ -70,10 +80,33 @@ export type PlacedAccessory = {
   scale: number;
 };
 
+export type Step = 1 | 1.5 | 2 | 3;
+
+const STEP_META: Record<number, { title: string; subtitle: string }> = {
+  1: { title: "Upload a scan", subtitle: "STL of the firearm you want to mold." },
+  1.5: { title: "Identify features", subtitle: "Click key points on the firearm for precise carving." },
+  2: { title: "Generating mold", subtitle: "Processing STL..." },
+  3: { title: "Splitting model", subtitle: "Separating the mold into left and right halves." },
+};
+
+export type FeaturePoint = {
+  name: string;
+  label: string;
+  color: string;
+  coords: [number, number, number] | null;
+};
+
 export default function Page() {
   const [step, setStep] = useState<Step>(1);
   const [viewMode, setViewMode] = useState<ViewMode>("unified");
   const [accessories, setAccessories] = useState<string[]>([]);
+  const [featurePoints, setFeaturePoints] = useState<FeaturePoint[]>([
+    { name: "tg_front", label: "Trigger Guard Front", color: "#fbbf24", coords: null },
+    { name: "slide_release", label: "Slide Release", color: "#60a5fa", coords: null },
+    { name: "ejection_port", label: "Ejection Port", color: "#f87171", coords: null },
+  ]);
+  const [activeFeatureIndex, setActiveFeatureIndex] = useState<number | null>(null);
+  const [alignedGunUrl, setAlignedGunUrl] = useState<string | null>(null);
   const [placedAccessories, setPlacedAccessories] = useState<PlacedAccessory[]>(
     []
   );
@@ -81,6 +114,7 @@ export default function Page() {
     null
   );
   const [fileName, setFileName] = useState<string | null>(null);
+  const [jobId, setJobId] = useState<string | null>(null);
 
   // Fetch accessories on mount
   useEffect(() => {
@@ -146,6 +180,19 @@ export default function Page() {
     rightUrl: API_BASE + urls.rightUrl,
   });
 
+  const onTagFeature = (index: number, coords: [number, number, number]) => {
+    setFeaturePoints((prev) =>
+      prev.map((fp, i) => (i === index ? { ...fp, coords } : fp))
+    );
+    // Auto-advance to next empty feature if exists
+    const nextEmpty = featurePoints.findIndex(
+      (fp, i) => i > index && fp.coords === null
+    );
+    if (nextEmpty !== -1) {
+      setActiveFeatureIndex(nextEmpty);
+    }
+  };
+
   const processFile = useCallback(
     async (file: File, withParams: Params) => {
       setError(null);
@@ -158,28 +205,128 @@ export default function Page() {
         for (const [k, v] of Object.entries(withParams)) {
           form.append(CAMEL_TO_SNAKE(k), String(v));
         }
-        const res = await fetch(`${API_BASE}/api/process`, {
+        // Step 1: Initial alignment
+        const res = await fetch(`${API_BASE}/api/align`, {
           method: "POST",
           body: form,
         });
         if (!res.ok) {
-          const body = await res.text();
-          throw new Error(`${res.status}: ${body.slice(0, 400)}`);
+          let errorMsg = `${res.status}`;
+          try {
+            const body = await res.json();
+            if (body.detail && typeof body.detail === "object") {
+              errorMsg += ": " + (body.detail.stderr || JSON.stringify(body.detail));
+            } else {
+              errorMsg += ": " + (body.detail || JSON.stringify(body));
+            }
+          } catch {
+            const text = await res.text();
+            errorMsg += ": " + text.slice(0, 400);
+          }
+          throw new Error(errorMsg);
         }
-        const data = (await res.json()) as ProcessResponse;
-        setAssets(absolutize(data));
-        setGeneratedParams(withParams);
-        setGeneratedFileName(file.name);
-        setStep(2);
-        window.setTimeout(() => setStep(3), 3000);
+
+        const data = await res.json();
+        setAlignedGunUrl(API_BASE + data.alignedUrl);
+        setStep(1.5);
+        setActiveFeatureIndex(0);
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setIsProcessing(false);
       }
     },
-    []
+    [featurePoints]
   );
+
+  const generateMold = useCallback(async () => {
+    if (!uploadedFile) return;
+    setError(null);
+    setIsProcessing(true);
+    setStep(2);
+    try {
+      const form = new FormData();
+      form.append("file", uploadedFile);
+      for (const [k, v] of Object.entries(params)) {
+        form.append(CAMEL_TO_SNAKE(k), String(v));
+      }
+      // Add tagged feature coordinates
+      form.append("feature_points", JSON.stringify(featurePoints));
+
+      const res = await fetch(`${API_BASE}/api/process`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        let errorMsg = `${res.status}`;
+        try {
+          const body = await res.json();
+          if (body.detail && typeof body.detail === "object") {
+            errorMsg += ": " + (body.detail.stderr || JSON.stringify(body.detail));
+          } else {
+            errorMsg += ": " + (body.detail || JSON.stringify(body));
+          }
+        } catch {
+          const text = await res.text();
+          errorMsg += ": " + text.slice(0, 400);
+        }
+        throw new Error(errorMsg);
+      }
+      const data = (await res.json()) as ProcessResponse;
+      setJobId(data.jobId);
+      setAssets(absolutize(data));
+      setGeneratedParams(params);
+      setGeneratedFileName(uploadedFile.name);
+      window.setTimeout(() => setStep(3), 3000);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      setStep(1.5);
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [uploadedFile, params, featurePoints, absolutize]);
+
+  const downloadHalf = async (side: "left" | "right") => {
+    if (!jobId || !assets) return;
+    const sideAccessories = placedAccessories.filter((a) => a.side === side);
+
+    if (sideAccessories.length === 0) {
+      const url = side === "left" ? assets.leftUrl : assets.rightUrl;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${stem}-${side}.stl`;
+      a.click();
+      return;
+    }
+
+    setIsProcessing(true);
+    try {
+      const form = new FormData();
+      form.append("job_id", jobId);
+      form.append("side", side);
+      form.append("accessories", JSON.stringify(sideAccessories));
+
+      const res = await fetch(`${API_BASE}/api/download-merged`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        const body = await res.text();
+        throw new Error(`Merge failed: ${body}`);
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${stem}-${side}-merged.stl`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const handleUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -193,14 +340,32 @@ export default function Page() {
   );
 
   const rerun = useCallback(() => {
-    if (uploadedFile) void processFile(uploadedFile, params);
-  }, [uploadedFile, params, processFile]);
+    if (!uploadedFile) return;
+
+    // If we've already generated a mold, check if we only changed mold-gen params
+    // or if we actually changed alignment params.
+    const alignmentChanged =
+      !generatedParams ||
+      params.mirror !== generatedParams.mirror ||
+      params.rotateZDeg !== generatedParams.rotateZDeg;
+
+    if (alignmentChanged) {
+      void processFile(uploadedFile, params);
+    } else {
+      void generateMold();
+    }
+  }, [uploadedFile, params, generatedParams, processFile, generateMold]);
 
   const reset = () => {
     setStep(1);
     setFileName(null);
     setUploadedFile(null);
     setAssets(null);
+    setJobId(null);
+    setAlignedGunUrl(null);
+    setActiveFeatureIndex(null);
+    setFeaturePoints((prev) => prev.map((f) => ({ ...f, coords: null })));
+    setPlacedAccessories([]);
     setError(null);
     setIsProcessing(false);
     setGeneratedParams(null);
@@ -225,6 +390,51 @@ export default function Page() {
             <h1 className="text-xl font-semibold">{STEP_META[step].title}</h1>
             <p className="text-sm text-zinc-400 mt-1">{STEP_META[step].subtitle}</p>
           </section>
+
+          {step === 1.5 && (
+            <section className="flex flex-col gap-4">
+              <div className="flex flex-col gap-2">
+                {featurePoints.map((fp, i) => (
+                  <button
+                    key={fp.name}
+                    onClick={() => setActiveFeatureIndex(i)}
+                    className={[
+                      "p-3 rounded-md border text-left transition-all",
+                      activeFeatureIndex === i
+                        ? "bg-zinc-800 border-zinc-100 ring-1 ring-zinc-100"
+                        : "bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800/50",
+                    ].join(" ")}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-3 h-3 rounded-full"
+                        style={{ backgroundColor: fp.color }}
+                      />
+                      <span className="text-sm font-medium">{fp.label}</span>
+                    </div>
+                    {fp.coords ? (
+                      <div className="mt-2 text-[10px] text-zinc-500 font-mono">
+                        X:{fp.coords[0].toFixed(1)} Y:{fp.coords[1].toFixed(1)} Z:
+                        {fp.coords[2].toFixed(1)}
+                      </div>
+                    ) : (
+                      <div className="mt-2 text-[10px] text-zinc-500 italic">
+                        Click on model to tag...
+                      </div>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              <button
+                onClick={generateMold}
+                disabled={featurePoints.some((fp) => fp.coords === null)}
+                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:bg-zinc-800 rounded-md font-semibold text-sm transition-colors"
+              >
+                Generate Mold
+              </button>
+            </section>
+          )}
 
           {step === 3 && assets && (
             <section className="flex flex-col gap-2">
@@ -303,9 +513,10 @@ export default function Page() {
                               label="X Position"
                               unit="mm"
                               value={acc.position[0]}
-                              min={-120}
-                              max={120}
+                              min={-150}
+                              max={150}
                               step={0.5}
+                              hint="Along length of gun"
                               onChange={(v) =>
                                 updateAccessory(acc.id, {
                                   position: [v, acc.position[1], acc.position[2]],
@@ -315,24 +526,11 @@ export default function Page() {
                             <Slider
                               label="Y Position"
                               unit="mm"
-                              value={acc.position[2]}
-                              min={-80}
-                              max={80}
-                              step={0.5}
-                              onChange={(v) =>
-                                updateAccessory(acc.id, {
-                                  position: [acc.position[0], acc.position[1], v],
-                                })
-                              }
-                            />
-                            <Slider
-                              label="Height (Z)"
-                              unit="mm"
                               value={acc.position[1]}
-                              min={-10}
-                              max={30}
-                              step={0.1}
-                              hint="Distance from the mold surface"
+                              min={-100}
+                              max={100}
+                              step={0.5}
+                              hint="Along height of gun"
                               onChange={(v) =>
                                 updateAccessory(acc.id, {
                                   position: [acc.position[0], v, acc.position[2]],
@@ -340,15 +538,36 @@ export default function Page() {
                               }
                             />
                             <Slider
+                              label="Height (Z)"
+                              unit="mm"
+                              value={acc.position[2]}
+                              min={-50}
+                              max={50}
+                              step={0.1}
+                              hint="Distance from mold surface"
+                              onChange={(v) =>
+                                updateAccessory(acc.id, {
+                                  // Left (+90 rot): World +Y is Local -Z.
+                                  // Right (-90 rot): World +Y is Local +Z.
+                                  position: [
+                                    acc.position[0],
+                                    acc.position[1],
+                                    acc.side === "left" ? -v : v,
+                                  ],
+                                })
+                              }
+                            />
+                            <Slider
                               label="Rotation"
                               unit="deg"
-                              value={acc.rotation[1]}
+                              value={acc.rotation[2]}
                               min={-180}
                               max={180}
                               step={1}
+                              hint="Rotate flat on surface"
                               onChange={(v) =>
                                 updateAccessory(acc.id, {
-                                  rotation: [acc.rotation[0], v, acc.rotation[2]],
+                                  rotation: [acc.rotation[0], acc.rotation[1], v],
                                 })
                               }
                             />
@@ -401,9 +620,31 @@ export default function Page() {
                 Mold ready. Halves separate along the slide-thickness axis.
               </div>
               <div className="flex flex-col gap-2">
-                <DownloadLink href={assets.fullUrl} download={`${stem}-mold.stl`} label="Download unified mold" />
-                <DownloadLink href={assets.leftUrl} download={`${stem}-left.stl`} label="Download left half" />
-                <DownloadLink href={assets.rightUrl} download={`${stem}-right.stl`} label="Download right half" />
+                <DownloadLink
+                  href={assets.fullUrl}
+                  download={`${stem}-mold.stl`}
+                  label="Download unified mold"
+                />
+                <button
+                  onClick={() => downloadHalf("left")}
+                  disabled={isProcessing}
+                  className="text-sm px-3 py-2 rounded-md border text-center border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 disabled:opacity-50"
+                >
+                  Download left half{" "}
+                  {placedAccessories.filter((a) => a.side === "left").length > 0
+                    ? "(merged)"
+                    : ""}
+                </button>
+                <button
+                  onClick={() => downloadHalf("right")}
+                  disabled={isProcessing}
+                  className="text-sm px-3 py-2 rounded-md border text-center border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 disabled:opacity-50"
+                >
+                  Download right half{" "}
+                  {placedAccessories.filter((a) => a.side === "right").length > 0
+                    ? "(merged)"
+                    : ""}
+                </button>
               </div>
               <button
                 onClick={reset}
@@ -434,10 +675,15 @@ export default function Page() {
             step={step}
             viewMode={viewMode}
             assets={assets}
+            alignedGunUrl={alignedGunUrl}
+            featurePoints={featurePoints}
+            activeFeatureIndex={activeFeatureIndex}
+            onTagFeature={onTagFeature}
             placedAccessories={placedAccessories}
             activeAccessoryId={activeAccessoryId}
             onUpdateAccessory={updateAccessory}
             onSetActiveAccessory={setActiveAccessoryId}
+            params={params}
           />
           {generatedParams && (
             <GeneratedInfo
@@ -502,6 +748,17 @@ function ParamPanel({
           step={0.1}
           hint="Gaussian pre-marching-cubes smoothing"
           onChange={(v) => update("smoothSigma", v)}
+          disabled={disabled}
+        />
+        <Slider
+          label="Smooth iterations"
+          unit="iter"
+          value={params.smoothIter}
+          min={0}
+          max={50}
+          step={1}
+          hint="Post-marching-cubes Taubin smoothing (fixes stair-stepping)"
+          onChange={(v) => update("smoothIter", v)}
           disabled={disabled}
         />
         <Select
@@ -608,12 +865,73 @@ function ParamPanel({
           onChange={(v) => update("retentionRotateDeg", v)}
           disabled={disabled || !params.retention}
         />
+        <Slider
+          label="Corner radius"
+          unit="mm"
+          value={params.retentionCornerRadius}
+          min={0}
+          max={10}
+          step={0.5}
+          hint="Round the sharp corners of the retention triangle"
+          onChange={(v) => update("retentionCornerRadius", v)}
+          disabled={disabled || !params.retention}
+        />
         <Checkbox
           label="One side only"
           checked={params.retentionOneSide}
           hint="Default carves both sides of the plug"
           onChange={(v) => update("retentionOneSide", v)}
           disabled={disabled || !params.retention}
+        />
+      </Group>
+
+      <Group title="Slide Release Relief" collapsible defaultOpen={false}>
+        <Checkbox
+          label="Enabled"
+          checked={params.srEnabled}
+          hint="Carve extra clearance for the slide release"
+          onChange={(v) => update("srEnabled", v)}
+          disabled={disabled}
+        />
+        <Slider
+          label="Width (Y)"
+          unit="mm"
+          value={params.srWidthY}
+          min={4}
+          max={30}
+          step={1}
+          onChange={(v) => update("srWidthY", v)}
+          disabled={disabled || !params.srEnabled}
+        />
+        <Slider
+          label="Depth (Z)"
+          unit="mm"
+          value={params.srDepthZ}
+          min={2}
+          max={15}
+          step={0.5}
+          onChange={(v) => update("srDepthZ", v)}
+          disabled={disabled || !params.srEnabled}
+        />
+        <Slider
+          label="Y Offset"
+          unit="mm"
+          value={params.srYOffset}
+          min={-10}
+          max={10}
+          step={0.5}
+          onChange={(v) => update("srYOffset", v)}
+          disabled={disabled || !params.srEnabled}
+        />
+        <Slider
+          label="Z Offset"
+          unit="mm"
+          value={params.srZOffset}
+          min={-10}
+          max={10}
+          step={0.5}
+          onChange={(v) => update("srZOffset", v)}
+          disabled={disabled || !params.srEnabled}
         />
       </Group>
     </section>
@@ -824,6 +1142,7 @@ function Checkbox({
 function StepIndicator({ current }: { current: Step }) {
   const steps: { n: Step; label: string }[] = [
     { n: 1, label: "Upload" },
+    { n: 1.5, label: "Identify" },
     { n: 2, label: "Generate" },
     { n: 3, label: "Split" },
   ];
