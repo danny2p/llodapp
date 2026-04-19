@@ -268,33 +268,12 @@ def sweep_cavity(gun_vox: np.ndarray, insertion_depth_vox: int) -> np.ndarray:
 
 def cavity_to_mesh(cavity: np.ndarray, origin: np.ndarray, pitch: float,
                    smooth_sigma: float = 0.0) -> trimesh.Trimesh:
-    # Build a signed distance-like field from the cavity, then marching cubes at
-    # level 0. EDT is locally linear near the surface, so a Gaussian at the same
-    # sigma preserves flat slopes better than Gaussian applied to a binary step
-    # function (which rings). Net effect: less visible stepping on near-planar
-    # faces at the same smoothing strength, better-preserved radii.
-    #
-    # Sub-voxel feature values (floats in [0, 1]) are retained by overwriting
-    # boundary cells with the rescaled feature value, so slide_release and
-    # friends keep their sub-voxel precision.
     from skimage import measure
-    from scipy.ndimage import distance_transform_edt, gaussian_filter
-
-    padded = np.pad(cavity, 1, mode="constant", constant_values=0)
-    cavity_bin = padded > 0.5
-    inside = distance_transform_edt(cavity_bin)
-    outside = distance_transform_edt(~cavity_bin)
-    sdf = (inside - outside).astype(np.float32)  # positive inside, negative outside
-
-    if cavity.dtype != bool:
-        boundary = np.abs(sdf) <= 1.0
-        sub_voxel = (padded.astype(np.float32) * 2.0 - 1.0)
-        sdf = np.where(boundary, sub_voxel, sdf)
-
+    from scipy.ndimage import gaussian_filter
+    padded = np.pad(cavity, 1, mode="constant", constant_values=0).astype(np.float32)
     if smooth_sigma > 0:
-        sdf = gaussian_filter(sdf, sigma=smooth_sigma)
-
-    verts, faces, _, _ = measure.marching_cubes(sdf, level=0.0)
+        padded = gaussian_filter(padded, sigma=smooth_sigma)
+    verts, faces, _, _ = measure.marching_cubes(padded, level=0.5)
     # Subtract 1.0 to account for padding
     verts = (verts - 1.0) * pitch + origin
     m = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
@@ -319,7 +298,7 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
-def _cache_key(input_path: Path, voxel_pitch: float, rotate_z_deg: float, mirror: boolean, total_length: float) -> str:
+def _cache_key(input_path: Path, voxel_pitch: float, rotate_z_deg: float, mirror: bool, total_length: float) -> str:
     mir = "1" if mirror else "0"
     return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}_l{total_length}"
 
