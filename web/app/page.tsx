@@ -1,15 +1,54 @@
 "use client";
 
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
-import type { SceneAssets, Step, TgAnchor } from "@/components/Scene";
+import type { SceneAssets, TgAnchor } from "@/components/Scene";
+import {
+  Upload,
+  Crosshair,
+  Cpu,
+  Scissors,
+  Download,
+  RotateCcw,
+  RefreshCw,
+  Zap,
+  FileUp,
+  AlertTriangle,
+  Target,
+  PackageOpen,
+  Layers,
+  LayoutGrid,
+  Square,
+  X,
+  Plus,
+  GripVertical,
+  MoveHorizontal,
+  MoveVertical,
+  MoveDiagonal,
+  RotateCw,
+  Sparkles,
+  Radio,
+} from "lucide-react";
+import {
+  Panel,
+  Group,
+  Slider,
+  Toggle,
+  Select,
+  Button,
+  LED,
+  Pill,
+  TerminalLine,
+  LiveClock,
+  ScanReticle,
+  TypingLines,
+} from "@/components/hud";
 
 const Scene = dynamic(() => import("@/components/Scene").then((m) => m.Scene), {
   ssr: false,
 });
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
 type ProcessResponse = SceneAssets & {
   jobId: string;
@@ -33,7 +72,6 @@ type Params = {
   retentionRotateDeg: number;
   retentionCornerRadius: number;
   retentionOneSide: boolean;
-  // Slide Release Blockout
   srEnabled: boolean;
   srWidthY: number;
   srDepthZ: number;
@@ -58,7 +96,6 @@ const DEFAULT_PARAMS: Params = {
   retentionRotateDeg: 0,
   retentionCornerRadius: 2.0,
   retentionOneSide: false,
-  // Slide Release Defaults
   srEnabled: true,
   srWidthY: 12,
   srDepthZ: 6,
@@ -82,12 +119,37 @@ export type PlacedAccessory = {
 
 export type Step = 1 | 1.5 | 2 | 3;
 
-const STEP_META: Record<number, { title: string; subtitle: string }> = {
-  1: { title: "Upload a scan", subtitle: "STL of the firearm you want to mold." },
-  1.5: { title: "Identify features", subtitle: "Click key points on the firearm for precise carving." },
-  2: { title: "Generating mold", subtitle: "Processing STL..." },
-  3: { title: "Splitting model", subtitle: "Separating the mold into left and right halves." },
+const STEP_META: Record<
+  number,
+  { id: string; title: string; subtitle: string; icon: React.ReactNode }
+> = {
+  1: {
+    id: "01",
+    title: "ACQUIRE",
+    subtitle: "Ingest firearm scan",
+    icon: <Upload size={14} />,
+  },
+  1.5: {
+    id: "02",
+    title: "TARGET",
+    subtitle: "Tag feature anchors",
+    icon: <Crosshair size={14} />,
+  },
+  2: {
+    id: "03",
+    title: "FABRICATE",
+    subtitle: "Sweep + voxelize",
+    icon: <Cpu size={14} />,
+  },
+  3: {
+    id: "04",
+    title: "EXTRACT",
+    subtitle: "Split + export halves",
+    icon: <Scissors size={14} />,
+  },
 };
+
+const STEP_ORDER: Step[] = [1, 1.5, 2, 3];
 
 export type FeaturePoint = {
   name: string;
@@ -96,16 +158,21 @@ export type FeaturePoint = {
   coords: [number, number, number] | null;
 };
 
+const INITIAL_FEATURES: FeaturePoint[] = [
+  { name: "tg_front", label: "TRIGGER GUARD", color: "#FBBF24", coords: null },
+  { name: "slide_release", label: "SLIDE RELEASE", color: "#22D3EE", coords: null },
+  { name: "ejection_port", label: "EJECTION PORT", color: "#F87171", coords: null },
+];
+
 export default function Page() {
   const [step, setStep] = useState<Step>(1);
   const [viewMode, setViewMode] = useState<ViewMode>("unified");
   const [accessories, setAccessories] = useState<string[]>([]);
-  const [featurePoints, setFeaturePoints] = useState<FeaturePoint[]>([
-    { name: "tg_front", label: "Trigger Guard Front", color: "#fbbf24", coords: null },
-    { name: "slide_release", label: "Slide Release", color: "#60a5fa", coords: null },
-    { name: "ejection_port", label: "Ejection Port", color: "#f87171", coords: null },
-  ]);
-  const [activeFeatureIndex, setActiveFeatureIndex] = useState<number | null>(null);
+  const [featurePoints, setFeaturePoints] =
+    useState<FeaturePoint[]>(INITIAL_FEATURES);
+  const [activeFeatureIndex, setActiveFeatureIndex] = useState<number | null>(
+    null
+  );
   const [alignedGunUrl, setAlignedGunUrl] = useState<string | null>(null);
   const [placedAccessories, setPlacedAccessories] = useState<PlacedAccessory[]>(
     []
@@ -115,8 +182,16 @@ export default function Page() {
   );
   const [fileName, setFileName] = useState<string | null>(null);
   const [jobId, setJobId] = useState<string | null>(null);
+  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
+  const [assets, setAssets] = useState<SceneAssets | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [params, setParams] = useState<Params>(DEFAULT_PARAMS);
+  const [generatedParams, setGeneratedParams] = useState<Params | null>(null);
+  const [generatedFileName, setGeneratedFileName] = useState<string | null>(
+    null
+  );
 
-  // Fetch accessories on mount
   useEffect(() => {
     fetch(`${API_BASE}/api/accessories`)
       .then((res) => {
@@ -124,22 +199,10 @@ export default function Page() {
         return res.json();
       })
       .then((data) => {
-        if (Array.isArray(data)) {
-          setAccessories(data);
-        } else {
-          console.error("accessories API did not return an array", data);
-          setAccessories([]);
-        }
+        if (Array.isArray(data)) setAccessories(data);
       })
       .catch((err) => console.error(err));
   }, []);
-  const [uploadedFile, setUploadedFile] = useState<File | null>(null);
-  const [assets, setAssets] = useState<SceneAssets | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [params, setParams] = useState<Params>(DEFAULT_PARAMS);
-  const [generatedParams, setGeneratedParams] = useState<Params | null>(null);
-  const [generatedFileName, setGeneratedFileName] = useState<string | null>(null);
 
   const updateParam = <K extends keyof Params>(key: K, value: Params[K]) => {
     setParams((p) => ({ ...p, [key]: value }));
@@ -154,7 +217,7 @@ export default function Page() {
         id,
         name,
         side: viewMode,
-        position: [0, 5, 0], // Start 5mm above "table"
+        position: [0, 5, 0],
         rotation: [0, 0, 0],
         scale: 1,
       },
@@ -184,7 +247,6 @@ export default function Page() {
     setFeaturePoints((prev) =>
       prev.map((fp, i) => (i === index ? { ...fp, coords } : fp))
     );
-    // Auto-advance to next empty feature if exists
     const nextEmpty = featurePoints.findIndex(
       (fp, i) => i > index && fp.coords === null
     );
@@ -205,7 +267,6 @@ export default function Page() {
         for (const [k, v] of Object.entries(withParams)) {
           form.append(CAMEL_TO_SNAKE(k), String(v));
         }
-        // Step 1: Initial alignment
         const res = await fetch(`${API_BASE}/api/align`, {
           method: "POST",
           body: form,
@@ -215,7 +276,8 @@ export default function Page() {
           try {
             const body = await res.json();
             if (body.detail && typeof body.detail === "object") {
-              errorMsg += ": " + (body.detail.stderr || JSON.stringify(body.detail));
+              errorMsg +=
+                ": " + (body.detail.stderr || JSON.stringify(body.detail));
             } else {
               errorMsg += ": " + (body.detail || JSON.stringify(body));
             }
@@ -236,7 +298,7 @@ export default function Page() {
         setIsProcessing(false);
       }
     },
-    [featurePoints]
+    []
   );
 
   const generateMold = useCallback(async () => {
@@ -250,7 +312,6 @@ export default function Page() {
       for (const [k, v] of Object.entries(params)) {
         form.append(CAMEL_TO_SNAKE(k), String(v));
       }
-      // Add tagged feature coordinates
       form.append("feature_points", JSON.stringify(featurePoints));
 
       const res = await fetch(`${API_BASE}/api/process`, {
@@ -262,7 +323,8 @@ export default function Page() {
         try {
           const body = await res.json();
           if (body.detail && typeof body.detail === "object") {
-            errorMsg += ": " + (body.detail.stderr || JSON.stringify(body.detail));
+            errorMsg +=
+              ": " + (body.detail.stderr || JSON.stringify(body.detail));
           } else {
             errorMsg += ": " + (body.detail || JSON.stringify(body));
           }
@@ -284,7 +346,7 @@ export default function Page() {
     } finally {
       setIsProcessing(false);
     }
-  }, [uploadedFile, params, featurePoints, absolutize]);
+  }, [uploadedFile, params, featurePoints]);
 
   const downloadHalf = async (side: "left" | "right") => {
     if (!jobId || !assets) return;
@@ -341,9 +403,6 @@ export default function Page() {
 
   const rerun = useCallback(() => {
     if (!uploadedFile) return;
-
-    // If we've already generated a mold, check if we only changed mold-gen params
-    // or if we actually changed alignment params.
     const alignmentChanged =
       !generatedParams ||
       params.mirror !== generatedParams.mirror ||
@@ -364,7 +423,7 @@ export default function Page() {
     setJobId(null);
     setAlignedGunUrl(null);
     setActiveFeatureIndex(null);
-    setFeaturePoints((prev) => prev.map((f) => ({ ...f, coords: null })));
+    setFeaturePoints(INITIAL_FEATURES.map((f) => ({ ...f, coords: null })));
     setPlacedAccessories([]);
     setError(null);
     setIsProcessing(false);
@@ -374,303 +433,92 @@ export default function Page() {
 
   const stem = fileName ? fileName.replace(/\.stl$/i, "") : "mold";
 
+  const systemState: "on" | "warn" | "err" = error
+    ? "err"
+    : isProcessing
+    ? "warn"
+    : "on";
+
+  const jobIdDisplay = jobId ? jobId.slice(0, 8).toUpperCase() : "—";
+
   return (
-    <div className="min-h-screen flex flex-col bg-black text-zinc-100">
-      <header className="border-b border-zinc-800 px-6 py-4 flex items-center justify-between">
-        <div className="font-semibold tracking-tight">LLOD · Mold Maker</div>
-        <StepIndicator current={step} />
-      </header>
+    <div className="h-screen flex flex-col overflow-hidden font-mono text-[var(--hud-text)]">
+      {/* ─── TOP BAR ──────────────────────────────────────── */}
+      <TopBar
+        step={step}
+        systemState={systemState}
+        fileName={fileName}
+        jobId={jobIdDisplay}
+        onReset={reset}
+        hasJob={!!jobId}
+      />
 
-      <div className="flex-1 grid grid-cols-[minmax(320px,380px)_1fr]">
-        <aside className="border-r border-zinc-800 p-6 flex flex-col gap-6 overflow-y-auto max-h-[calc(100vh-69px)]">
-          <section>
-            <h2 className="text-xs uppercase tracking-wider text-zinc-500 mb-2">
-              Step {step}
-            </h2>
-            <h1 className="text-xl font-semibold">{STEP_META[step].title}</h1>
-            <p className="text-sm text-zinc-400 mt-1">{STEP_META[step].subtitle}</p>
-          </section>
+      {/* ─── MAIN GRID ────────────────────────────────────── */}
+      <div className="flex-1 flex min-h-0">
+        {/* ─── LEFT RAIL ────────────────────────────────── */}
+        <aside className="w-[360px] shrink-0 border-r border-[var(--hud-line)] bg-[var(--hud-panel)]/60 hud-grid overflow-y-auto hud-scroll animate-hud-slide-left">
+          <div className="p-3 flex flex-col gap-3">
+            {/* STEP CONTEXT */}
+            <StepContext
+              step={step}
+              featurePoints={featurePoints}
+              activeFeatureIndex={activeFeatureIndex}
+              setActiveFeatureIndex={setActiveFeatureIndex}
+              isProcessing={isProcessing}
+              uploadedFile={uploadedFile}
+              fileName={fileName}
+              handleUpload={handleUpload}
+              generateMold={generateMold}
+              assets={assets}
+              viewMode={viewMode}
+              setViewMode={setViewMode}
+              accessories={accessories}
+              placedAccessories={placedAccessories}
+              activeAccessoryId={activeAccessoryId}
+              setActiveAccessoryId={setActiveAccessoryId}
+              addAccessory={addAccessory}
+              updateAccessory={updateAccessory}
+              removeAccessory={removeAccessory}
+              downloadHalf={downloadHalf}
+              stem={stem}
+              reset={reset}
+            />
 
-          {step === 1.5 && (
-            <section className="flex flex-col gap-4">
-              <div className="flex flex-col gap-2">
-                {featurePoints.map((fp, i) => (
-                  <button
-                    key={fp.name}
-                    onClick={() => setActiveFeatureIndex(i)}
-                    className={[
-                      "p-3 rounded-md border text-left transition-all",
-                      activeFeatureIndex === i
-                        ? "bg-zinc-800 border-zinc-100 ring-1 ring-zinc-100"
-                        : "bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800/50",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div
-                        className="w-3 h-3 rounded-full"
-                        style={{ backgroundColor: fp.color }}
-                      />
-                      <span className="text-sm font-medium">{fp.label}</span>
-                    </div>
-                    {fp.coords ? (
-                      <div className="mt-2 text-[10px] text-zinc-500 font-mono">
-                        X:{fp.coords[0].toFixed(1)} Y:{fp.coords[1].toFixed(1)} Z:
-                        {fp.coords[2].toFixed(1)}
-                      </div>
-                    ) : (
-                      <div className="mt-2 text-[10px] text-zinc-500 italic">
-                        Click on model to tag...
-                      </div>
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              <button
-                onClick={generateMold}
-                disabled={featurePoints.some((fp) => fp.coords === null)}
-                className="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 disabled:bg-zinc-800 rounded-md font-semibold text-sm transition-colors"
-              >
-                Generate Mold
-              </button>
-            </section>
-          )}
-
-          {step === 3 && assets && (
-            <section className="flex flex-col gap-2">
-              <h3 className="text-xs uppercase tracking-wider text-zinc-500 mb-1">
-                Work Surface
-              </h3>
-              <div className="grid grid-cols-3 gap-1 bg-zinc-900 p-1 rounded-md border border-zinc-800">
-                {(["unified", "left", "right"] as const).map((m) => (
-                  <button
-                    key={m}
-                    onClick={() => setViewMode(m)}
-                    className={[
-                      "text-[11px] py-1.5 rounded transition-colors capitalize",
-                      viewMode === m
-                        ? "bg-zinc-100 text-black font-medium"
-                        : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800",
-                    ].join(" ")}
-                  >
-                    {m}
-                  </button>
-                ))}
-              </div>
-            </section>
-          )}
-
-          {step === 3 && assets && viewMode !== "unified" && (
-            <Group title="Accessories" collapsible defaultOpen={true}>
-              <div className="grid grid-cols-2 gap-2 mb-4">
-                {accessories.map((acc) => (
-                  <button
-                    key={acc}
-                    onClick={() => addAccessory(acc)}
-                    className="text-[10px] p-2 rounded bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 hover:border-zinc-600 transition-colors flex flex-col items-center gap-1"
-                  >
-                    <div className="w-8 h-8 bg-zinc-900 rounded flex items-center justify-center">
-                      <span className="text-zinc-500">STL</span>
-                    </div>
-                    <span className="truncate w-full text-center">{acc}</span>
-                  </button>
-                ))}
-              </div>
-
-              {placedAccessories.filter((a) => a.side === viewMode).length > 0 && (
-                <div className="flex flex-col gap-4 border-t border-zinc-800 pt-4">
-                  {placedAccessories
-                    .filter((a) => a.side === viewMode)
-                    .map((acc) => (
-                      <div
-                        key={acc.id}
-                        className={[
-                          "p-3 rounded-md border transition-colors",
-                          activeAccessoryId === acc.id
-                            ? "bg-zinc-900 border-emerald-900/50 shadow-[0_0_10px_rgba(16,185,129,0.05)]"
-                            : "bg-zinc-900/50 border-zinc-800",
-                        ].join(" ")}
-                        onClick={() => setActiveAccessoryId(acc.id)}
-                      >
-                        <div className="flex items-center justify-between mb-3">
-                          <span className="text-[11px] font-medium text-emerald-500">
-                            {acc.name}
-                          </span>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeAccessory(acc.id);
-                            }}
-                            className="text-[10px] text-zinc-500 hover:text-red-400"
-                          >
-                            Remove
-                          </button>
-                        </div>
-
-                        {activeAccessoryId === acc.id && (
-                          <div className="flex flex-col gap-3">
-                            <Slider
-                              label="X Position"
-                              unit="mm"
-                              value={acc.position[0]}
-                              min={-150}
-                              max={150}
-                              step={0.5}
-                              hint="Along length of gun"
-                              onChange={(v) =>
-                                updateAccessory(acc.id, {
-                                  position: [v, acc.position[1], acc.position[2]],
-                                })
-                              }
-                            />
-                            <Slider
-                              label="Y Position"
-                              unit="mm"
-                              value={acc.position[1]}
-                              min={-100}
-                              max={100}
-                              step={0.5}
-                              hint="Along height of gun"
-                              onChange={(v) =>
-                                updateAccessory(acc.id, {
-                                  position: [acc.position[0], v, acc.position[2]],
-                                })
-                              }
-                            />
-                            <Slider
-                              label="Height (Z)"
-                              unit="mm"
-                              value={acc.position[2]}
-                              min={-50}
-                              max={50}
-                              step={0.1}
-                              hint="Distance from mold surface"
-                              onChange={(v) =>
-                                updateAccessory(acc.id, {
-                                  // Left (+90 rot): World +Y is Local -Z.
-                                  // Right (-90 rot): World +Y is Local +Z.
-                                  position: [
-                                    acc.position[0],
-                                    acc.position[1],
-                                    acc.side === "left" ? -v : v,
-                                  ],
-                                })
-                              }
-                            />
-                            <Slider
-                              label="Rotation"
-                              unit="deg"
-                              value={acc.rotation[2]}
-                              min={-180}
-                              max={180}
-                              step={1}
-                              hint="Rotate flat on surface"
-                              onChange={(v) =>
-                                updateAccessory(acc.id, {
-                                  rotation: [acc.rotation[0], acc.rotation[1], v],
-                                })
-                              }
-                            />
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                </div>
-              )}
-            </Group>
-          )}
-
-          {step === 1 && !isProcessing && !uploadedFile && (
-            <label className="flex flex-col gap-2">
-              <span className="text-sm text-zinc-300">Scan file (.stl)</span>
-              <input
-                type="file"
-                accept=".stl,model/stl,application/octet-stream"
-                onChange={handleUpload}
-                className="text-sm file:mr-3 file:py-2 file:px-3 file:rounded-md file:border-0 file:bg-zinc-800 file:text-zinc-100 file:cursor-pointer hover:file:bg-zinc-700"
+            {/* PARAMETERS */}
+            <Panel title="Fabrication Parameters" id="§ FAB.PARAMS">
+              <ParamPanel
+                params={params}
+                update={updateParam}
+                disabled={isProcessing}
+                canRerun={!!uploadedFile}
+                onRerun={rerun}
               />
-              <span className="text-xs text-zinc-500">
-                Processing takes 15–30 seconds.
-              </span>
-            </label>
-          )}
+            </Panel>
 
-          {isProcessing && (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-center gap-3 text-sm text-zinc-300">
-                <Spinner />
-                <span>Processing {fileName ?? "scan"}…</span>
-              </div>
-              <span className="text-xs text-zinc-500">
-                Voxelizing + sweeping + decimating. Takes 15–30 seconds.
-              </span>
-            </div>
-          )}
-
-          {step === 2 && !isProcessing && (
-            <div className="flex items-center gap-3 text-sm text-zinc-300">
-              <Spinner />
-              <span>Animating insertion of {fileName ?? "scan"}…</span>
-            </div>
-          )}
-
-          {step === 3 && assets && (
-            <div className="flex flex-col gap-3">
-              <div className="text-sm text-zinc-300">
-                Mold ready. Halves separate along the slide-thickness axis.
-              </div>
-              <div className="flex flex-col gap-2">
-                <DownloadLink
-                  href={assets.fullUrl}
-                  download={`${stem}-mold.stl`}
-                  label="Download unified mold"
-                />
-                <button
-                  onClick={() => downloadHalf("left")}
-                  disabled={isProcessing}
-                  className="text-sm px-3 py-2 rounded-md border text-center border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 disabled:opacity-50"
-                >
-                  Download left half{" "}
-                  {placedAccessories.filter((a) => a.side === "left").length > 0
-                    ? "(merged)"
-                    : ""}
-                </button>
-                <button
-                  onClick={() => downloadHalf("right")}
-                  disabled={isProcessing}
-                  className="text-sm px-3 py-2 rounded-md border text-center border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-100 disabled:opacity-50"
-                >
-                  Download right half{" "}
-                  {placedAccessories.filter((a) => a.side === "right").length > 0
-                    ? "(merged)"
-                    : ""}
-                </button>
-              </div>
-              <button
-                onClick={reset}
-                className="self-start text-sm px-3 py-2 rounded-md bg-zinc-800 hover:bg-zinc-700"
-              >
-                Start over (new scan)
-              </button>
-            </div>
-          )}
-
-          {error && (
-            <div className="text-xs text-red-400 border border-red-900 rounded-md p-3 whitespace-pre-wrap">
-              {error}
-            </div>
-          )}
-
-          <ParamPanel
-            params={params}
-            update={updateParam}
-            disabled={isProcessing}
-            canRerun={!!uploadedFile}
-            onRerun={rerun}
-          />
+            {/* ERROR PANEL */}
+            {error && (
+              <section className="hud-panel border-[rgba(239,68,68,0.45)]">
+                <div className="p-3 flex items-start gap-2">
+                  <AlertTriangle
+                    size={14}
+                    className="text-[var(--hud-red)] shrink-0 mt-0.5"
+                  />
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <span className="font-display text-[11px] uppercase tracking-wider text-[var(--hud-red)]">
+                      System Fault
+                    </span>
+                    <pre className="text-[10px] text-[var(--hud-text-dim)] whitespace-pre-wrap break-words font-mono">
+                      {error}
+                    </pre>
+                  </div>
+                </div>
+              </section>
+            )}
+          </div>
         </aside>
 
-        <main className="relative">
+        {/* ─── VIEWPORT ─────────────────────────────────── */}
+        <main className="flex-1 relative min-w-0 animate-hud-fade-up">
           <Scene
             step={step}
             viewMode={viewMode}
@@ -685,17 +533,856 @@ export default function Page() {
             onSetActiveAccessory={setActiveAccessoryId}
             params={params}
           />
-          {generatedParams && (
-            <GeneratedInfo
-              params={generatedParams}
-              fileName={generatedFileName}
-            />
-          )}
+
+          {/* HUD overlay chrome */}
+          <ViewportHUD
+            step={step}
+            viewMode={viewMode}
+            isProcessing={isProcessing}
+            featurePoints={featurePoints}
+            activeFeatureIndex={activeFeatureIndex}
+            generatedParams={generatedParams}
+            generatedFileName={generatedFileName}
+            jobId={jobIdDisplay}
+          />
         </main>
       </div>
     </div>
   );
 }
+
+// ──────────────────────────────────────────────────────────────────
+// TOP BAR
+// ──────────────────────────────────────────────────────────────────
+
+function TopBar({
+  step,
+  systemState,
+  fileName,
+  jobId,
+  onReset,
+  hasJob,
+}: {
+  step: Step;
+  systemState: "on" | "warn" | "err";
+  fileName: string | null;
+  jobId: string;
+  onReset: () => void;
+  hasJob: boolean;
+}) {
+  const sysLabel =
+    systemState === "err" ? "FAULT" : systemState === "warn" ? "BUSY" : "NOMINAL";
+
+  return (
+    <header className="relative border-b border-[var(--hud-line)] bg-[var(--hud-void)]/80 backdrop-blur-md h-12 flex items-center px-4 shrink-0 z-10">
+      {/* Brand */}
+      <div className="flex items-center gap-3">
+        <Logo />
+        <div className="flex flex-col leading-tight">
+          <span className="font-display text-[14px] font-bold tracking-[0.2em] text-[var(--hud-teal-bright)] hud-glow-teal">
+            FABRICATOR
+          </span>
+          <span className="font-mono text-[9px] tracking-[0.25em] text-[var(--hud-text-faint)]">
+            LLOD · MOLD.SYS v0.4
+          </span>
+        </div>
+      </div>
+
+      <div className="h-6 w-px bg-[var(--hud-line-strong)] mx-5" />
+
+      {/* Step rail */}
+      <StepRail step={step} />
+
+      {/* Right cluster */}
+      <div className="ml-auto flex items-center gap-4">
+        {fileName && (
+          <div className="flex items-center gap-2 text-[10px] font-mono">
+            <span className="text-[var(--hud-text-faint)]">FILE</span>
+            <span className="text-[var(--hud-teal-bright)] max-w-[220px] truncate">
+              {fileName}
+            </span>
+          </div>
+        )}
+        <div className="flex items-center gap-2 text-[10px] font-mono">
+          <span className="text-[var(--hud-text-faint)]">JOB</span>
+          <span className="text-[var(--hud-text-dim)] tabular-nums">
+            {jobId}
+          </span>
+        </div>
+        <div className="h-5 w-px bg-[var(--hud-line)]" />
+        <LiveClock />
+        <div className="h-5 w-px bg-[var(--hud-line)]" />
+        <LED state={systemState} label={`SYS ${sysLabel}`} />
+        {hasJob && (
+          <button
+            onClick={onReset}
+            className="ml-1 p-1.5 border border-[var(--hud-line-strong)] hover:border-[var(--hud-amber)] hover:text-[var(--hud-amber-bright)] text-[var(--hud-text-dim)] transition-colors"
+            title="Reset session"
+          >
+            <RotateCcw size={12} />
+          </button>
+        )}
+      </div>
+    </header>
+  );
+}
+
+function Logo() {
+  return (
+    <div className="relative w-7 h-7 flex items-center justify-center">
+      <svg viewBox="0 0 28 28" className="w-7 h-7">
+        <polygon
+          points="14,2 26,9 26,19 14,26 2,19 2,9"
+          fill="none"
+          stroke="var(--hud-teal-bright)"
+          strokeWidth="1.2"
+        />
+        <polygon
+          points="14,7 21,11 21,17 14,21 7,17 7,11"
+          fill="rgba(45, 212, 191, 0.15)"
+          stroke="var(--hud-teal)"
+          strokeWidth="0.8"
+        />
+        <circle
+          cx="14"
+          cy="14"
+          r="2"
+          fill="var(--hud-teal-bright)"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function StepRail({ step }: { step: Step }) {
+  return (
+    <nav className="flex items-center gap-0">
+      {STEP_ORDER.map((s, i) => {
+        const meta = STEP_META[s];
+        const active = s === step;
+        const done = s < step;
+        return (
+          <div key={s} className="flex items-center">
+            <div
+              className={`relative flex items-center gap-2 px-3 py-1 border ${
+                active
+                  ? "border-[var(--hud-teal-bright)] text-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.14)] shadow-[0_0_12px_rgba(45,212,191,0.25)]"
+                  : done
+                  ? "border-[var(--hud-teal)]/60 text-[var(--hud-teal)]"
+                  : "border-[var(--hud-text-ghost)] text-[var(--hud-text-faint)]"
+              }`}
+              style={{
+                clipPath:
+                  "polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%)",
+              }}
+            >
+              <span className="font-mono text-[9px] tabular-nums opacity-70">
+                {meta.id}
+              </span>
+              <span className="shrink-0">{meta.icon}</span>
+              <span className="font-display text-[10px] uppercase tracking-[0.16em] font-medium">
+                {meta.title}
+              </span>
+              {active && (
+                <span className="absolute -top-[1px] left-[6px] right-[6px] h-[1px] bg-[var(--hud-teal-bright)] shadow-[0_0_6px_rgba(94,234,212,0.9)]" />
+              )}
+            </div>
+            {i < STEP_ORDER.length - 1 && (
+              <div
+                className={`w-4 h-px ${
+                  done
+                    ? "bg-[var(--hud-teal)]"
+                    : "bg-[var(--hud-text-ghost)]"
+                }`}
+              />
+            )}
+          </div>
+        );
+      })}
+    </nav>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// STEP CONTEXT (LEFT RAIL SWITCH)
+// ──────────────────────────────────────────────────────────────────
+
+function StepContext(props: {
+  step: Step;
+  featurePoints: FeaturePoint[];
+  activeFeatureIndex: number | null;
+  setActiveFeatureIndex: (i: number | null) => void;
+  isProcessing: boolean;
+  uploadedFile: File | null;
+  fileName: string | null;
+  handleUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  generateMold: () => void;
+  assets: SceneAssets | null;
+  viewMode: ViewMode;
+  setViewMode: (v: ViewMode) => void;
+  accessories: string[];
+  placedAccessories: PlacedAccessory[];
+  activeAccessoryId: string | null;
+  setActiveAccessoryId: (id: string | null) => void;
+  addAccessory: (name: string) => void;
+  updateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
+  removeAccessory: (id: string) => void;
+  downloadHalf: (side: "left" | "right") => void;
+  stem: string;
+  reset: () => void;
+}) {
+  const {
+    step,
+    featurePoints,
+    activeFeatureIndex,
+    setActiveFeatureIndex,
+    isProcessing,
+    uploadedFile,
+    fileName,
+    handleUpload,
+    generateMold,
+    assets,
+    viewMode,
+    setViewMode,
+    accessories,
+    placedAccessories,
+    activeAccessoryId,
+    setActiveAccessoryId,
+    addAccessory,
+    updateAccessory,
+    removeAccessory,
+    downloadHalf,
+    stem,
+    reset,
+  } = props;
+
+  const meta = STEP_META[step];
+  const tone: "default" | "accent" | "warn" =
+    step === 2 ? "warn" : "accent";
+
+  return (
+    <Panel
+      title={meta.title}
+      subtitle={meta.subtitle}
+      id={`// STEP.${meta.id}`}
+      tone={tone}
+      right={
+        isProcessing ? (
+          <Pill tone="warn" className="animate-pulse">
+            <Radio size={9} className="animate-hud-blink" />
+            PROCESSING
+          </Pill>
+        ) : step === 3 ? (
+          <Pill tone="accent">READY</Pill>
+        ) : (
+          <Pill tone="dim">STANDBY</Pill>
+        )
+      }
+    >
+      {step === 1 && !uploadedFile && !isProcessing && (
+        <UploadDropzone handleUpload={handleUpload} />
+      )}
+
+      {step === 1 && isProcessing && (
+        <ProcessingIndicator
+          label={`Aligning specimen`}
+          fileName={fileName}
+        />
+      )}
+
+      {step === 1.5 && (
+        <FeatureTagger
+          featurePoints={featurePoints}
+          activeFeatureIndex={activeFeatureIndex}
+          setActiveFeatureIndex={setActiveFeatureIndex}
+          onGenerate={generateMold}
+        />
+      )}
+
+      {step === 2 && <FabricationStatus fileName={fileName} />}
+
+      {step === 3 && assets && (
+        <ExtractionPanel
+          viewMode={viewMode}
+          setViewMode={setViewMode}
+          assets={assets}
+          accessories={accessories}
+          placedAccessories={placedAccessories}
+          activeAccessoryId={activeAccessoryId}
+          setActiveAccessoryId={setActiveAccessoryId}
+          addAccessory={addAccessory}
+          updateAccessory={updateAccessory}
+          removeAccessory={removeAccessory}
+          downloadHalf={downloadHalf}
+          stem={stem}
+          reset={reset}
+        />
+      )}
+    </Panel>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// STEP 1 — UPLOAD DROPZONE
+// ──────────────────────────────────────────────────────────────────
+
+function UploadDropzone({
+  handleUpload,
+}: {
+  handleUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <label className="group/drop relative cursor-pointer block">
+        <input
+          type="file"
+          accept=".stl,model/stl,application/octet-stream"
+          onChange={handleUpload}
+          className="absolute inset-0 opacity-0 cursor-pointer"
+        />
+        <div className="hud-grid-fine border border-dashed border-[var(--hud-line-strong)] group-hover/drop:border-[var(--hud-teal-bright)] group-hover/drop:bg-[rgba(45,212,191,0.04)] transition-all p-6 flex flex-col items-center text-center gap-3">
+          <div className="relative">
+            <div className="absolute inset-0 rounded-full bg-[var(--hud-teal)]/20 blur-md group-hover/drop:bg-[var(--hud-teal-bright)]/40 transition-colors" />
+            <FileUp
+              size={28}
+              className="relative text-[var(--hud-teal-bright)]"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <span className="font-display text-[12px] uppercase tracking-[0.16em] text-[var(--hud-teal-bright)]">
+              Drop Specimen
+            </span>
+            <span className="font-mono text-[10px] text-[var(--hud-text-faint)]">
+              .stl · drag here or click to browse
+            </span>
+          </div>
+        </div>
+      </label>
+
+      <div className="flex flex-col gap-1 text-[10px] font-mono text-[var(--hud-text-faint)]">
+        <div className="flex justify-between">
+          <span>AVG.PROCESS</span>
+          <span className="text-[var(--hud-text-dim)]">15–30s</span>
+        </div>
+        <div className="flex justify-between">
+          <span>PIPELINE</span>
+          <span className="text-[var(--hud-text-dim)]">VOX → SWEEP → MC</span>
+        </div>
+        <div className="flex justify-between">
+          <span>ALIGN</span>
+          <span className="text-[var(--hud-text-dim)]">RANSAC + MABR</span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// STEP 1.5 — FEATURE TAGGER
+// ──────────────────────────────────────────────────────────────────
+
+function FeatureTagger({
+  featurePoints,
+  activeFeatureIndex,
+  setActiveFeatureIndex,
+  onGenerate,
+}: {
+  featurePoints: FeaturePoint[];
+  activeFeatureIndex: number | null;
+  setActiveFeatureIndex: (i: number | null) => void;
+  onGenerate: () => void;
+}) {
+  const allSet = featurePoints.every((fp) => fp.coords !== null);
+  const progress = featurePoints.filter((fp) => fp.coords !== null).length;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center justify-between text-[10px] font-mono">
+        <span className="text-[var(--hud-text-dim)]">
+          TARGET PROGRESS
+        </span>
+        <span className="text-[var(--hud-teal-bright)] tabular-nums">
+          {progress}/{featurePoints.length}
+        </span>
+      </div>
+      <div className="flex gap-1">
+        {featurePoints.map((fp, i) => (
+          <div
+            key={fp.name}
+            className={`flex-1 h-[3px] ${
+              fp.coords
+                ? "bg-[var(--hud-teal-bright)] shadow-[0_0_6px_rgba(94,234,212,0.6)]"
+                : "bg-[var(--hud-text-ghost)]"
+            }`}
+          />
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        {featurePoints.map((fp, i) => (
+          <FeatureButton
+            key={fp.name}
+            fp={fp}
+            idx={i}
+            active={activeFeatureIndex === i}
+            onClick={() => setActiveFeatureIndex(i)}
+          />
+        ))}
+      </div>
+
+      <Button
+        variant="primary"
+        disabled={!allSet}
+        onClick={onGenerate}
+        icon={<Zap size={12} />}
+      >
+        Initiate Fabrication
+      </Button>
+    </div>
+  );
+}
+
+function FeatureButton({
+  fp,
+  idx,
+  active,
+  onClick,
+}: {
+  fp: FeaturePoint;
+  idx: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`group/f relative text-left px-2.5 py-2 border transition-all ${
+        active
+          ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.08)] shadow-[inset_0_0_12px_rgba(45,212,191,0.06)]"
+          : fp.coords
+          ? "border-[var(--hud-line)] hover:border-[var(--hud-teal)] bg-[var(--hud-panel-2)]"
+          : "border-[var(--hud-text-ghost)] hover:border-[var(--hud-line-strong)] bg-transparent"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <div className="relative flex items-center justify-center w-5 h-5">
+          <div
+            className="absolute inset-0 opacity-20"
+            style={{ background: fp.color, filter: "blur(6px)" }}
+          />
+          <div
+            className="relative w-2.5 h-2.5"
+            style={{
+              background: fp.coords ? fp.color : "transparent",
+              border: `1px solid ${fp.color}`,
+              boxShadow: fp.coords ? `0 0 6px ${fp.color}` : "none",
+            }}
+          />
+        </div>
+        <div className="flex flex-col min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
+              T.{String(idx + 1).padStart(2, "0")}
+            </span>
+            <span className="font-display text-[11px] uppercase tracking-wider text-[var(--hud-text)] truncate">
+              {fp.label}
+            </span>
+          </div>
+          {fp.coords ? (
+            <span className="font-mono text-[9.5px] text-[var(--hud-text-dim)] tabular-nums mt-0.5">
+              X {fp.coords[0].toFixed(1)}
+              <span className="text-[var(--hud-text-ghost)]">·</span>
+              Y {fp.coords[1].toFixed(1)}
+              <span className="text-[var(--hud-text-ghost)]">·</span>
+              Z {fp.coords[2].toFixed(1)}
+            </span>
+          ) : (
+            <span className="font-mono text-[9.5px] text-[var(--hud-text-faint)] italic mt-0.5">
+              {active ? "AWAITING CLICK ON MODEL" : "UNSET"}
+            </span>
+          )}
+        </div>
+        {active && (
+          <Crosshair
+            size={14}
+            className="text-[var(--hud-teal-bright)] animate-hud-blink shrink-0"
+          />
+        )}
+      </div>
+    </button>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// STEP 2 — FABRICATION STATUS
+// ──────────────────────────────────────────────────────────────────
+
+function FabricationStatus({ fileName }: { fileName: string | null }) {
+  const lines = useMemo(
+    () => [
+      `spec ingested :: ${fileName ?? "unknown.stl"}`,
+      "voxelizing @ 0.25mm pitch...",
+      "ransac slide detection :: locked",
+      "mabr rotation :: aligned",
+      "sweeping occupancy along +X axis...",
+      "marching cubes :: extracting iso-surface",
+      "taubin smoothing :: 10 iterations",
+      "decimating to target face count...",
+      "retention SDF :: carving indent",
+      "slide release clearance :: channeling",
+      "split plane :: z=0 earcut cap",
+      "spooling halves to disk...",
+    ],
+    [fileName]
+  );
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-center gap-3 p-3 border border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)]">
+        <ScanReticle size={32} />
+        <div className="flex flex-col">
+          <span className="font-display text-[11px] uppercase tracking-widest text-[var(--hud-amber-bright)] hud-glow-amber">
+            Fabrication Active
+          </span>
+          <span className="font-mono text-[10px] text-[var(--hud-text-dim)]">
+            Do not interrupt pipeline.
+          </span>
+        </div>
+      </div>
+      <div className="max-h-[220px] overflow-y-auto hud-scroll p-2 border border-[var(--hud-line)] bg-[var(--hud-void)]/60">
+        <TypingLines lines={lines} speed={280} />
+      </div>
+    </div>
+  );
+}
+
+function ProcessingIndicator({
+  label,
+  fileName,
+}: {
+  label: string;
+  fileName: string | null;
+}) {
+  return (
+    <div className="flex items-center gap-3 p-3 border border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)]">
+      <ScanReticle size={30} />
+      <div className="flex flex-col">
+        <span className="font-display text-[11px] uppercase tracking-widest text-[var(--hud-teal-bright)]">
+          {label}
+        </span>
+        {fileName && (
+          <span className="font-mono text-[10px] text-[var(--hud-text-dim)] truncate max-w-[240px]">
+            {fileName}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// STEP 3 — EXTRACTION PANEL
+// ──────────────────────────────────────────────────────────────────
+
+function ExtractionPanel({
+  viewMode,
+  setViewMode,
+  accessories,
+  placedAccessories,
+  activeAccessoryId,
+  setActiveAccessoryId,
+  addAccessory,
+  updateAccessory,
+  removeAccessory,
+  downloadHalf,
+  stem,
+  reset,
+  assets,
+}: {
+  viewMode: ViewMode;
+  setViewMode: (v: ViewMode) => void;
+  assets: SceneAssets;
+  accessories: string[];
+  placedAccessories: PlacedAccessory[];
+  activeAccessoryId: string | null;
+  setActiveAccessoryId: (id: string | null) => void;
+  addAccessory: (name: string) => void;
+  updateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
+  removeAccessory: (id: string) => void;
+  downloadHalf: (side: "left" | "right") => void;
+  stem: string;
+  reset: () => void;
+}) {
+  const sideAcc = placedAccessories.filter((a) => a.side === viewMode);
+  const leftCount = placedAccessories.filter((a) => a.side === "left").length;
+  const rightCount = placedAccessories.filter((a) => a.side === "right").length;
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* View selector */}
+      <div>
+        <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider mb-1.5">
+          // WORKBENCH.VIEW
+        </div>
+        <div className="grid grid-cols-3 gap-1 p-0.5 border border-[var(--hud-line-strong)] bg-[var(--hud-panel-3)]/40">
+          {(
+            [
+              { v: "unified" as const, Icon: LayoutGrid, label: "UNI" },
+              { v: "left" as const, Icon: Square, label: "L" },
+              { v: "right" as const, Icon: Square, label: "R" },
+            ] satisfies { v: ViewMode; Icon: typeof Square; label: string }[]
+          ).map(({ v, Icon, label }) => (
+            <button
+              key={v}
+              onClick={() => setViewMode(v)}
+              className={`flex items-center justify-center gap-1.5 py-1.5 text-[10px] font-display uppercase tracking-wider transition-all ${
+                viewMode === v
+                  ? "bg-[var(--hud-teal)] text-[#001b18] shadow-[0_0_10px_rgba(45,212,191,0.4)]"
+                  : "text-[var(--hud-text-dim)] hover:text-[var(--hud-teal-bright)] hover:bg-[rgba(45,212,191,0.08)]"
+              }`}
+            >
+              <Icon size={11} />
+              {label}
+              {v === "left" && leftCount > 0 && (
+                <span
+                  className={`text-[8px] tabular-nums ${
+                    viewMode === v
+                      ? "text-[#001b18]"
+                      : "text-[var(--hud-amber-bright)]"
+                  }`}
+                >
+                  +{leftCount}
+                </span>
+              )}
+              {v === "right" && rightCount > 0 && (
+                <span
+                  className={`text-[8px] tabular-nums ${
+                    viewMode === v
+                      ? "text-[#001b18]"
+                      : "text-[var(--hud-amber-bright)]"
+                  }`}
+                >
+                  +{rightCount}
+                </span>
+              )}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Accessories when on a specific half */}
+      {viewMode !== "unified" && (
+        <div className="flex flex-col gap-2.5 animate-hud-fade-up">
+          <div className="flex items-center justify-between">
+            <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider">
+              // ATTACH.LIBRARY · {viewMode.toUpperCase()}
+            </div>
+            <Pill tone="dim">
+              <PackageOpen size={9} />
+              {accessories.length} STL
+            </Pill>
+          </div>
+          <div className="grid grid-cols-3 gap-1.5">
+            {accessories.map((acc) => (
+              <button
+                key={acc}
+                onClick={() => addAccessory(acc)}
+                className="flex flex-col items-center gap-1 p-2 border border-[var(--hud-line)] hover:border-[var(--hud-teal-bright)] hover:bg-[rgba(45,212,191,0.06)] transition-all group/acc"
+              >
+                <div className="w-8 h-8 border border-[var(--hud-line-strong)] group-hover/acc:border-[var(--hud-teal-bright)] flex items-center justify-center bg-[var(--hud-void)]">
+                  <Plus
+                    size={10}
+                    className="text-[var(--hud-text-faint)] group-hover/acc:text-[var(--hud-teal-bright)]"
+                  />
+                </div>
+                <span className="font-mono text-[8.5px] text-[var(--hud-text-dim)] truncate w-full text-center">
+                  {acc.replace(/\.stl$/i, "")}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          {sideAcc.length > 0 && (
+            <div className="flex flex-col gap-1.5 pt-2 border-t border-[var(--hud-line)]">
+              <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider">
+                // PLACED ({sideAcc.length})
+              </div>
+              {sideAcc.map((acc) => (
+                <AccessoryCard
+                  key={acc.id}
+                  acc={acc}
+                  active={activeAccessoryId === acc.id}
+                  onSelect={() => setActiveAccessoryId(acc.id)}
+                  onRemove={() => removeAccessory(acc.id)}
+                  onUpdate={(u) => updateAccessory(acc.id, u)}
+                />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Export actions */}
+      <div className="flex flex-col gap-1.5 pt-2 border-t border-[var(--hud-line)]">
+        <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider mb-1">
+          // EXTRACT.TARGETS
+        </div>
+        <a
+          href={assets.fullUrl}
+          download={`${stem}-mold.stl`}
+          className="hud-btn inline-flex items-center justify-center gap-2"
+        >
+          <Download size={12} />
+          Unified Mold · STL
+        </a>
+        <div className="grid grid-cols-2 gap-1.5">
+          <Button
+            onClick={() => downloadHalf("left")}
+            icon={<Download size={11} />}
+          >
+            Half L
+            {leftCount > 0 && (
+              <span className="text-[8.5px] text-[var(--hud-amber-bright)] ml-1">
+                +{leftCount}
+              </span>
+            )}
+          </Button>
+          <Button
+            onClick={() => downloadHalf("right")}
+            icon={<Download size={11} />}
+          >
+            Half R
+            {rightCount > 0 && (
+              <span className="text-[8.5px] text-[var(--hud-amber-bright)] ml-1">
+                +{rightCount}
+              </span>
+            )}
+          </Button>
+        </div>
+        <button
+          onClick={reset}
+          className="text-[10px] font-mono uppercase tracking-wider text-[var(--hud-text-faint)] hover:text-[var(--hud-amber-bright)] mt-1 flex items-center justify-center gap-1.5 transition-colors py-1"
+        >
+          <RotateCcw size={10} />
+          New Session · Clear State
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AccessoryCard({
+  acc,
+  active,
+  onSelect,
+  onRemove,
+  onUpdate,
+}: {
+  acc: PlacedAccessory;
+  active: boolean;
+  onSelect: () => void;
+  onRemove: () => void;
+  onUpdate: (u: Partial<PlacedAccessory>) => void;
+}) {
+  return (
+    <div
+      onClick={onSelect}
+      className={`border transition-all cursor-pointer ${
+        active
+          ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.06)] shadow-[0_0_12px_rgba(45,212,191,0.15)]"
+          : "border-[var(--hud-line)] bg-[var(--hud-panel-2)]"
+      }`}
+    >
+      <div className="flex items-center justify-between px-2 py-1.5 border-b border-[var(--hud-line)]">
+        <div className="flex items-center gap-1.5 min-w-0">
+          <GripVertical
+            size={11}
+            className="text-[var(--hud-text-faint)] shrink-0"
+          />
+          <span className="font-mono text-[10px] text-[var(--hud-teal-bright)] truncate">
+            {acc.name.replace(/\.stl$/i, "")}
+          </span>
+        </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
+          className="text-[var(--hud-text-faint)] hover:text-[var(--hud-red)] p-1"
+        >
+          <X size={11} />
+        </button>
+      </div>
+      {active && (
+        <div className="p-2 flex flex-col gap-2 animate-hud-fade-up">
+          <Slider
+            label="POS X"
+            code="⟵→"
+            unit="mm"
+            value={acc.position[0]}
+            min={-150}
+            max={150}
+            step={0.5}
+            onChange={(v) =>
+              onUpdate({
+                position: [v, acc.position[1], acc.position[2]],
+              })
+            }
+          />
+          <Slider
+            label="POS Y"
+            code="⟷"
+            unit="mm"
+            value={acc.position[1]}
+            min={-100}
+            max={100}
+            step={0.5}
+            onChange={(v) =>
+              onUpdate({
+                position: [acc.position[0], v, acc.position[2]],
+              })
+            }
+          />
+          <Slider
+            label="STANDOFF Z"
+            code="↑"
+            unit="mm"
+            value={Math.abs(acc.position[2])}
+            min={-50}
+            max={50}
+            step={0.1}
+            onChange={(v) =>
+              onUpdate({
+                position: [
+                  acc.position[0],
+                  acc.position[1],
+                  acc.side === "left" ? -v : v,
+                ],
+              })
+            }
+          />
+          <Slider
+            label="ROT Z"
+            code="↻"
+            unit="deg"
+            value={acc.rotation[2]}
+            min={-180}
+            max={180}
+            step={1}
+            onChange={(v) =>
+              onUpdate({
+                rotation: [acc.rotation[0], acc.rotation[1], v],
+              })
+            }
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// PARAMETER PANEL
+// ──────────────────────────────────────────────────────────────────
 
 function ParamPanel({
   params,
@@ -711,58 +1398,61 @@ function ParamPanel({
   onRerun: () => void;
 }) {
   return (
-    <section className="flex flex-col gap-5 pt-4 border-t border-zinc-800">
-      <div className="flex items-center justify-between">
-        <h3 className="text-xs uppercase tracking-wider text-zinc-500">
-          Parameters
-        </h3>
-        {canRerun && (
-          <button
+    <div className="flex flex-col">
+      {canRerun && (
+        <div className="mb-2">
+          <Button
+            variant="primary"
             onClick={onRerun}
             disabled={disabled}
-            className="text-xs px-3 py-1.5 rounded-md bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 disabled:cursor-not-allowed"
+            icon={<RefreshCw size={11} className={disabled ? "animate-spin" : ""} />}
+            className="w-full"
           >
-            Re-run
-          </button>
-        )}
-      </div>
+            Recompile
+          </Button>
+        </div>
+      )}
 
-      <Group title="Detail">
+      <Group title="Detail" code="§ DETAIL" defaultOpen={true} tone="accent">
         <Slider
-          label="Voxel pitch"
+          label="VOXEL PITCH"
+          code="δ"
           unit="mm"
           value={params.voxelPitch}
           min={0.2}
           max={0.5}
           step={0.05}
-          hint="Lower = more surface detail, more compute"
+          hint="Lower = more surface detail, more compute."
           onChange={(v) => update("voxelPitch", v)}
           disabled={disabled}
         />
         <Slider
-          label="Smooth sigma"
+          label="SMOOTH σ"
+          code="σ"
           unit="vox"
           value={params.smoothSigma}
           min={0}
           max={2}
           step={0.1}
-          hint="Gaussian pre-marching-cubes smoothing"
+          hint="Gaussian pre-marching-cubes smoothing."
           onChange={(v) => update("smoothSigma", v)}
           disabled={disabled}
         />
         <Slider
-          label="Smooth iterations"
+          label="SMOOTH ITER"
+          code="n"
           unit="iter"
           value={params.smoothIter}
           min={0}
           max={50}
           step={1}
-          hint="Post-marching-cubes Taubin smoothing (fixes stair-stepping)"
+          hint="Post-MC Taubin (removes stair-stepping)."
           onChange={(v) => update("smoothIter", v)}
           disabled={disabled}
         />
         <Select
-          label="Plug faces"
+          label="PLUG FACES"
+          code="Σf"
           value={params.plugDecimTarget}
           options={[8000, 15000, 30000, 60000, 120000]}
           onChange={(v) => update("plugDecimTarget", v)}
@@ -770,131 +1460,136 @@ function ParamPanel({
         />
       </Group>
 
-      <Group title="Alignment">
-        <Checkbox
-          label="Mirror Z"
+      <Group title="Alignment" code="§ ALIGN" tone="accent">
+        <Toggle
+          label="MIRROR Z"
+          code="⇌"
           checked={params.mirror}
-          hint="Use if slide release/ejection side is wrong"
+          hint="Flip if slide release / ejection side is inverted."
           onChange={(v) => update("mirror", v)}
           disabled={disabled}
         />
         <Slider
-          label="Rotate Z"
+          label="ROTATE Z"
+          code="↻"
           unit="deg"
           value={params.rotateZDeg}
           min={-45}
           max={45}
           step={1}
-          hint="Corrects MABR alignment errors"
+          hint="Correction for MABR alignment errors."
           onChange={(v) => update("rotateZDeg", v)}
           disabled={disabled}
         />
       </Group>
 
-      <Group title="Trigger Retention" collapsible defaultOpen={false}>
-        <Checkbox
-          label="Enabled"
+      <Group title="Trigger Retention" code="§ RET.TRIG" tone="warn">
+        <Toggle
+          label="ENABLED"
           checked={params.retention}
-          hint="Adds triangle indent behind trigger-guard front edge"
+          hint="Triangle indent behind TG front edge."
           onChange={(v) => update("retention", v)}
           disabled={disabled}
         />
         <Slider
-          label="Front offset"
+          label="FRONT OFFSET"
+          code="Δx"
           unit="mm"
           value={params.retentionFrontOffset}
           min={0}
           max={20}
           step={0.5}
-          hint="mm behind TG front edge where the flat side starts"
           onChange={(v) => update("retentionFrontOffset", v)}
           disabled={disabled || !params.retention}
         />
         <Slider
-          label="Length"
+          label="LENGTH"
+          code="L"
           unit="mm"
           value={params.retentionLength}
           min={4}
           max={40}
           step={1}
-          hint="Triangle length from flat side to point"
           onChange={(v) => update("retentionLength", v)}
           disabled={disabled || !params.retention}
         />
         <Slider
-          label="Width (Y)"
+          label="WIDTH Y"
+          code="W"
           unit="mm"
           value={params.retentionWidthY}
           min={4}
           max={30}
           step={1}
-          hint="Triangle width at the flat side"
           onChange={(v) => update("retentionWidthY", v)}
           disabled={disabled || !params.retention}
         />
         <Slider
-          label="Depth (Z)"
+          label="DEPTH Z"
+          code="D"
           unit="mm"
           value={params.retentionDepthZ}
           min={0.5}
           max={10}
           step={0.1}
-          hint="Max bump depth at the flat side"
           onChange={(v) => update("retentionDepthZ", v)}
           disabled={disabled || !params.retention}
         />
         <Slider
-          label="Y offset"
+          label="Y OFFSET"
+          code="Δy"
           unit="mm"
           value={params.retentionYOffset}
           min={-15}
           max={15}
           step={0.5}
-          hint="Shift triangle away from TG center"
           onChange={(v) => update("retentionYOffset", v)}
           disabled={disabled || !params.retention}
         />
         <Slider
-          label="Rotate Z"
+          label="ROT Z"
+          code="θ"
           unit="deg"
           value={params.retentionRotateDeg}
           min={-90}
           max={90}
           step={1}
-          hint="Rotate the triangle around +Z, anchored at the flat side"
           onChange={(v) => update("retentionRotateDeg", v)}
           disabled={disabled || !params.retention}
         />
         <Slider
-          label="Corner radius"
+          label="CORNER R"
+          code="r"
           unit="mm"
           value={params.retentionCornerRadius}
           min={0}
           max={10}
           step={0.5}
-          hint="Round the sharp corners of the retention triangle"
+          hint="Round the triangle's sharp corners."
           onChange={(v) => update("retentionCornerRadius", v)}
           disabled={disabled || !params.retention}
         />
-        <Checkbox
-          label="One side only"
+        <Toggle
+          label="ONE SIDE"
+          code="±"
           checked={params.retentionOneSide}
-          hint="Default carves both sides of the plug"
+          hint="Default carves both sides of plug."
           onChange={(v) => update("retentionOneSide", v)}
           disabled={disabled || !params.retention}
         />
       </Group>
 
-      <Group title="Slide Release Relief" collapsible defaultOpen={false}>
-        <Checkbox
-          label="Enabled"
+      <Group title="Slide Release Relief" code="§ REL.SR" tone="warn">
+        <Toggle
+          label="ENABLED"
           checked={params.srEnabled}
-          hint="Carve extra clearance for the slide release"
+          hint="Clearance channel for slide release."
           onChange={(v) => update("srEnabled", v)}
           disabled={disabled}
         />
         <Slider
-          label="Width (Y)"
+          label="WIDTH Y"
+          code="W"
           unit="mm"
           value={params.srWidthY}
           min={4}
@@ -904,7 +1599,8 @@ function ParamPanel({
           disabled={disabled || !params.srEnabled}
         />
         <Slider
-          label="Depth (Z)"
+          label="DEPTH Z"
+          code="D"
           unit="mm"
           value={params.srDepthZ}
           min={2}
@@ -914,7 +1610,8 @@ function ParamPanel({
           disabled={disabled || !params.srEnabled}
         />
         <Slider
-          label="Y Offset"
+          label="Y OFFSET"
+          code="Δy"
           unit="mm"
           value={params.srYOffset}
           min={-10}
@@ -924,18 +1621,301 @@ function ParamPanel({
           disabled={disabled || !params.srEnabled}
         />
         <Slider
-          label="Chamfer"
+          label="CHAMFER"
+          code="c"
           unit="mm"
           value={params.srChamfer}
           min={0}
           max={10}
           step={0.5}
-          hint="45-degree cut on the outer corners of the relief channel"
+          hint="45° cut on outer corners."
           onChange={(v) => update("srChamfer", v)}
           disabled={disabled || !params.srEnabled}
         />
       </Group>
-    </section>
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────
+// VIEWPORT HUD OVERLAY
+// ──────────────────────────────────────────────────────────────────
+
+function ViewportHUD({
+  step,
+  viewMode,
+  isProcessing,
+  featurePoints,
+  activeFeatureIndex,
+  generatedParams,
+  generatedFileName,
+  jobId,
+}: {
+  step: Step;
+  viewMode: ViewMode;
+  isProcessing: boolean;
+  featurePoints: FeaturePoint[];
+  activeFeatureIndex: number | null;
+  generatedParams: Params | null;
+  generatedFileName: string | null;
+  jobId: string;
+}) {
+  const modeLabel =
+    step === 1
+      ? "AWAITING SPECIMEN"
+      : step === 1.5
+      ? activeFeatureIndex !== null
+        ? `TAG :: ${featurePoints[activeFeatureIndex].label}`
+        : "TARGET ACQUISITION"
+      : step === 2
+      ? "FABRICATING"
+      : `EXTRACTION · ${viewMode.toUpperCase()}`;
+
+  return (
+    <div className="absolute inset-0 pointer-events-none select-none">
+      {/* Corner brackets */}
+      <svg className="absolute inset-0 w-full h-full" aria-hidden>
+        <defs>
+          <linearGradient id="hud-corner" x1="0" x2="1">
+            <stop offset="0%" stopColor="var(--hud-teal-bright)" />
+            <stop offset="100%" stopColor="var(--hud-teal)" />
+          </linearGradient>
+        </defs>
+        {/* TL */}
+        <polyline
+          points="16,40 16,16 40,16"
+          stroke="url(#hud-corner)"
+          strokeWidth="1"
+          fill="none"
+        />
+        {/* TR */}
+        <polyline
+          points="calc(100% - 40) 16, calc(100% - 16) 16, calc(100% - 16) 40"
+          stroke="url(#hud-corner)"
+          strokeWidth="1"
+          fill="none"
+        />
+      </svg>
+
+      <div className="absolute top-3 left-3 flex items-center gap-2">
+        <div className="w-2 h-2 bg-[var(--hud-teal-bright)] shadow-[0_0_6px_var(--hud-teal-bright)]" />
+        <div className="w-2 h-2 bg-[var(--hud-teal-bright)] shadow-[0_0_6px_var(--hud-teal-bright)] opacity-60" />
+        <div className="w-2 h-2 bg-[var(--hud-teal-bright)] shadow-[0_0_6px_var(--hud-teal-bright)] opacity-30" />
+      </div>
+
+      {/* Top-left mode readout */}
+      <div className="absolute top-3 left-10 flex items-center gap-3 bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line-strong)] px-3 py-1.5 pointer-events-none">
+        <div className="flex flex-col leading-none">
+          <span className="text-[8.5px] font-mono text-[var(--hud-text-faint)] tracking-wider">
+            // MODE
+          </span>
+          <span className="font-display text-[11px] uppercase tracking-[0.16em] text-[var(--hud-teal-bright)]">
+            {modeLabel}
+          </span>
+        </div>
+        {isProcessing && (
+          <div className="relative">
+            <span className="hud-led hud-led-warn" />
+          </div>
+        )}
+      </div>
+
+      {/* Top-right readout */}
+      <div className="absolute top-3 right-3 flex flex-col items-end gap-2 pointer-events-none">
+        <div className="bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line)] px-3 py-1.5 flex items-center gap-3">
+          <div className="flex flex-col leading-none items-end">
+            <span className="text-[8.5px] font-mono text-[var(--hud-text-faint)] tracking-wider">
+              JOB.ID
+            </span>
+            <span className="font-mono text-[11px] text-[var(--hud-text-dim)] tabular-nums">
+              {jobId}
+            </span>
+          </div>
+          <div className="h-6 w-px bg-[var(--hud-line)]" />
+          <div className="flex flex-col leading-none items-end">
+            <span className="text-[8.5px] font-mono text-[var(--hud-text-faint)] tracking-wider">
+              STEP
+            </span>
+            <span className="font-mono text-[11px] text-[var(--hud-teal-bright)] tabular-nums">
+              {STEP_META[step].id}/04
+            </span>
+          </div>
+        </div>
+        {generatedParams && step === 3 && (
+          <GeneratedInfo
+            params={generatedParams}
+            fileName={generatedFileName}
+          />
+        )}
+      </div>
+
+      {/* Center reticle — shown while tagging */}
+      {step === 1.5 && activeFeatureIndex !== null && (
+        <CenterReticle />
+      )}
+
+      {/* Bottom-left terminal echo */}
+      <div className="absolute bottom-3 left-3 flex flex-col gap-0.5 max-w-[46%] pointer-events-none">
+        <TerminalLine tone="accent" stamp="[SYS]">
+          {modeLabel.toLowerCase()}
+        </TerminalLine>
+        {step === 1.5 && (
+          <TerminalLine tone="default" stamp="[TGT]">
+            {featurePoints.filter((f) => f.coords).length}/
+            {featurePoints.length} anchors locked
+          </TerminalLine>
+        )}
+        {step === 3 && (
+          <TerminalLine tone="success" stamp="[OK]">
+            mold ready · halves separable along slide-thickness axis
+          </TerminalLine>
+        )}
+      </div>
+
+      {/* Bottom-right axis compass */}
+      <AxisCompass />
+    </div>
+  );
+}
+
+function CenterReticle() {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+      <svg width="120" height="120" viewBox="0 0 120 120">
+        <circle
+          cx="60"
+          cy="60"
+          r="40"
+          fill="none"
+          stroke="var(--hud-teal-bright)"
+          strokeWidth="0.6"
+          strokeDasharray="2 3"
+          opacity="0.4"
+        />
+        <circle
+          cx="60"
+          cy="60"
+          r="18"
+          fill="none"
+          stroke="var(--hud-teal-bright)"
+          strokeWidth="0.8"
+          opacity="0.55"
+        />
+        <line
+          x1="60"
+          y1="30"
+          x2="60"
+          y2="45"
+          stroke="var(--hud-teal-bright)"
+          strokeWidth="1"
+        />
+        <line
+          x1="60"
+          y1="75"
+          x2="60"
+          y2="90"
+          stroke="var(--hud-teal-bright)"
+          strokeWidth="1"
+        />
+        <line
+          x1="30"
+          y1="60"
+          x2="45"
+          y2="60"
+          stroke="var(--hud-teal-bright)"
+          strokeWidth="1"
+        />
+        <line
+          x1="75"
+          y1="60"
+          x2="90"
+          y2="60"
+          stroke="var(--hud-teal-bright)"
+          strokeWidth="1"
+        />
+        <circle cx="60" cy="60" r="1.2" fill="var(--hud-teal-bright)" />
+      </svg>
+    </div>
+  );
+}
+
+function AxisCompass() {
+  return (
+    <div className="absolute bottom-3 right-3 pointer-events-none">
+      <div className="bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line)] p-2 flex flex-col items-center gap-1">
+        <svg width="60" height="60" viewBox="0 0 60 60">
+          {/* grid background */}
+          <rect
+            x="5"
+            y="5"
+            width="50"
+            height="50"
+            fill="none"
+            stroke="var(--hud-line)"
+            strokeWidth="0.4"
+            strokeDasharray="1 2"
+          />
+          {/* X (red-teal) */}
+          <line
+            x1="30"
+            y1="30"
+            x2="52"
+            y2="30"
+            stroke="var(--hud-red)"
+            strokeWidth="1.5"
+          />
+          <text
+            x="55"
+            y="32"
+            fill="var(--hud-red)"
+            fontSize="7"
+            fontFamily="var(--font-mono)"
+          >
+            X
+          </text>
+          {/* Y (amber) */}
+          <line
+            x1="30"
+            y1="30"
+            x2="30"
+            y2="8"
+            stroke="var(--hud-amber)"
+            strokeWidth="1.5"
+          />
+          <text
+            x="27"
+            y="8"
+            fill="var(--hud-amber)"
+            fontSize="7"
+            fontFamily="var(--font-mono)"
+          >
+            Y
+          </text>
+          {/* Z (teal) */}
+          <line
+            x1="30"
+            y1="30"
+            x2="14"
+            y2="46"
+            stroke="var(--hud-teal-bright)"
+            strokeWidth="1.5"
+          />
+          <text
+            x="4"
+            y="50"
+            fill="var(--hud-teal-bright)"
+            fontSize="7"
+            fontFamily="var(--font-mono)"
+          >
+            Z
+          </text>
+          <circle cx="30" cy="30" r="1.5" fill="#FFF" />
+        </svg>
+        <span className="font-mono text-[8px] tracking-wider text-[var(--hud-text-faint)]">
+          WORLD.AXIS
+        </span>
+      </div>
+    </div>
   );
 }
 
@@ -946,269 +1926,73 @@ function GeneratedInfo({
   params: Params;
   fileName: string | null;
 }) {
-  const rows: [string, string][] = [
-    ["voxel pitch", `${params.voxelPitch} mm`],
-    ["smooth sigma", `${params.smoothSigma} vox`],
-    ["plug faces", params.plugDecimTarget.toLocaleString()],
-    ["mirror", params.mirror ? "yes" : "no"],
-    ["rotate Z", `${params.rotateZDeg}°`],
+  const rows: [string, string, "default" | "accent"][] = [
+    ["VOXEL δ", `${params.voxelPitch}mm`, "default"],
+    ["SMOOTH σ", `${params.smoothSigma}`, "default"],
+    ["FACES", params.plugDecimTarget.toLocaleString(), "default"],
+    ["MIRROR", params.mirror ? "ON" : "OFF", params.mirror ? "accent" : "default"],
+    ["ROT Z", `${params.rotateZDeg}°`, "default"],
   ];
-  const retentionRows: [string, string][] = params.retention
+  const retRows: [string, string][] = params.retention
     ? [
-        ["front offset", `${params.retentionFrontOffset} mm`],
-        ["length", `${params.retentionLength} mm`],
-        ["width Y", `${params.retentionWidthY} mm`],
-        ["depth Z", `${params.retentionDepthZ} mm`],
-        ["Y offset", `${params.retentionYOffset} mm`],
-        ["rotate Z", `${params.retentionRotateDeg}°`],
-        ["sides", params.retentionOneSide ? "+Z only" : "both"],
+        ["Δx", `${params.retentionFrontOffset}mm`],
+        ["L", `${params.retentionLength}mm`],
+        ["W", `${params.retentionWidthY}mm`],
+        ["D", `${params.retentionDepthZ}mm`],
+        ["θ", `${params.retentionRotateDeg}°`],
+        ["r", `${params.retentionCornerRadius}mm`],
+        ["SIDES", params.retentionOneSide ? "+Z" : "BOTH"],
       ]
     : [];
   return (
-    <div className="absolute top-4 right-4 bg-black/70 backdrop-blur-sm border border-zinc-800 rounded-md px-3 py-2 text-[11px] leading-relaxed text-zinc-300 font-mono max-w-[260px] pointer-events-none select-text">
-      {fileName && (
-        <div className="text-zinc-100 truncate mb-1">{fileName}</div>
-      )}
-      <InfoRows rows={rows} />
-      <div className="text-zinc-500 mt-1.5">
-        retention {params.retention ? "on" : "off"}
-      </div>
-      {params.retention && <InfoRows rows={retentionRows} />}
-    </div>
-  );
-}
-
-function InfoRows({ rows }: { rows: [string, string][] }) {
-  return (
-    <div className="grid grid-cols-[auto_auto] gap-x-3">
-      {rows.map(([k, v]) => (
-        <div key={k} className="contents">
-          <span className="text-zinc-500">{k}</span>
-          <span className="text-zinc-200 tabular-nums text-right">{v}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Group({
-  title,
-  children,
-  collapsible,
-  defaultOpen = true,
-}: {
-  title: string;
-  children: React.ReactNode;
-  collapsible?: boolean;
-  defaultOpen?: boolean;
-}) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
-
-  return (
-    <div className="flex flex-col gap-3">
-      <button
-        onClick={() => collapsible && setIsOpen(!isOpen)}
-        disabled={!collapsible}
-        className={[
-          "flex items-center justify-between w-full text-left",
-          collapsible ? "cursor-pointer group/title" : "cursor-default",
-        ].join(" ")}
-      >
-        <h4 className="text-[11px] uppercase tracking-wider text-zinc-500 group-hover/title:text-zinc-300 transition-colors">
-          {title}
-        </h4>
-        {collapsible && (
-          <span
-            className={[
-              "text-[10px] text-zinc-600 group-hover/title:text-zinc-400 transition-transform",
-              isOpen ? "rotate-0" : "-rotate-90",
-            ].join(" ")}
-          >
-            ▼
-          </span>
-        )}
-      </button>
-      {isOpen && <div className="flex flex-col gap-3">{children}</div>}
-    </div>
-  );
-}
-
-function Slider({
-  label,
-  unit,
-  value,
-  min,
-  max,
-  step,
-  hint,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  unit?: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  hint?: string;
-  onChange: (v: number) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <label className={["flex flex-col gap-1", disabled ? "opacity-50" : ""].join(" ")}>
-      <div className="flex items-baseline justify-between">
-        <span className="text-sm text-zinc-200">{label}</span>
-        <span className="text-xs text-zinc-400 tabular-nums">
-          {value}
-          {unit ? ` ${unit}` : ""}
+    <div className="bg-[var(--hud-void)]/75 backdrop-blur-sm border border-[var(--hud-line)] p-2.5 max-w-[260px] select-text pointer-events-auto">
+      <div className="flex items-center gap-1.5 mb-1.5 pb-1.5 border-b border-[var(--hud-line)]">
+        <Sparkles size={10} className="text-[var(--hud-teal-bright)]" />
+        <span className="font-display text-[9.5px] uppercase tracking-[0.14em] text-[var(--hud-teal-bright)]">
+          Build Spec
         </span>
       </div>
-      <input
-        type="range"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        onChange={(e) => onChange(parseFloat(e.target.value))}
-        disabled={disabled}
-        className="accent-emerald-500"
-      />
-      {hint && <span className="text-[11px] text-zinc-500">{hint}</span>}
-    </label>
-  );
-}
-
-function Select({
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  value: number;
-  options: number[];
-  onChange: (v: number) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <label className={["flex items-center justify-between gap-3", disabled ? "opacity-50" : ""].join(" ")}>
-      <span className="text-sm text-zinc-200">{label}</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(parseInt(e.target.value, 10))}
-        disabled={disabled}
-        className="text-sm bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1"
-      >
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o.toLocaleString()}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-function Checkbox({
-  label,
-  checked,
-  hint,
-  onChange,
-  disabled,
-}: {
-  label: string;
-  checked: boolean;
-  hint?: string;
-  onChange: (v: boolean) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <label className={["flex flex-col gap-0.5", disabled ? "opacity-50" : ""].join(" ")}>
-      <span className="flex items-center gap-2 text-sm text-zinc-200">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={(e) => onChange(e.target.checked)}
-          disabled={disabled}
-          className="accent-emerald-500"
-        />
-        {label}
-      </span>
-      {hint && <span className="text-[11px] text-zinc-500 ml-6">{hint}</span>}
-    </label>
-  );
-}
-
-function StepIndicator({ current }: { current: Step }) {
-  const steps: { n: Step; label: string }[] = [
-    { n: 1, label: "Upload" },
-    { n: 1.5, label: "Identify" },
-    { n: 2, label: "Generate" },
-    { n: 3, label: "Split" },
-  ];
-  return (
-    <ol className="flex items-center gap-2 text-xs">
-      {steps.map(({ n, label }, i) => {
-        const active = n === current;
-        const done = n < current;
-        return (
-          <li key={n} className="flex items-center gap-2">
+      {fileName && (
+        <div className="text-[10px] font-mono text-[var(--hud-text)] truncate mb-1.5">
+          {fileName}
+        </div>
+      )}
+      <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] font-mono">
+        {rows.map(([k, v, t]) => (
+          <div key={k} className="contents">
+            <span className="text-[var(--hud-text-faint)]">{k}</span>
             <span
-              className={[
-                "flex items-center justify-center rounded-full w-6 h-6 font-semibold",
-                active
-                  ? "bg-zinc-100 text-black"
-                  : done
-                  ? "bg-emerald-600 text-white"
-                  : "bg-zinc-800 text-zinc-400",
-              ].join(" ")}
+              className={`${
+                t === "accent"
+                  ? "text-[var(--hud-teal-bright)]"
+                  : "text-[var(--hud-text-dim)]"
+              } text-right tabular-nums`}
             >
-              {n}
+              {v}
             </span>
-            <span className={active ? "text-zinc-100" : "text-zinc-500"}>
-              {label}
+          </div>
+        ))}
+      </div>
+      {params.retention && (
+        <>
+          <div className="mt-2 pt-1.5 border-t border-[var(--hud-line)] flex items-center gap-1.5">
+            <LED state="on" />
+            <span className="font-display text-[9.5px] uppercase tracking-wider text-[var(--hud-amber-bright)]">
+              Retention Active
             </span>
-            {i < steps.length - 1 && <span className="w-8 h-px bg-zinc-700 mx-1" />}
-          </li>
-        );
-      })}
-    </ol>
-  );
-}
-
-function Spinner() {
-  return (
-    <span
-      className="inline-block w-4 h-4 rounded-full border-2 border-zinc-600 border-t-zinc-100 animate-spin"
-      aria-label="loading"
-    />
-  );
-}
-
-function DownloadLink({
-  href,
-  download,
-  label,
-}: {
-  href?: string;
-  download: string;
-  label: string;
-}) {
-  const disabled = !href;
-  return (
-    <a
-      href={href}
-      download={download}
-      aria-disabled={disabled}
-      className={[
-        "text-sm px-3 py-2 rounded-md border text-center",
-        disabled
-          ? "pointer-events-none border-zinc-800 text-zinc-600"
-          : "border-zinc-700 bg-zinc-900 hover:bg-zinc-800 text-zinc-100",
-      ].join(" ")}
-    >
-      {label}
-    </a>
+          </div>
+          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] font-mono mt-1">
+            {retRows.map(([k, v]) => (
+              <div key={k} className="contents">
+                <span className="text-[var(--hud-text-faint)]">{k}</span>
+                <span className="text-[var(--hud-text-dim)] text-right tabular-nums">
+                  {v}
+                </span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
   );
 }

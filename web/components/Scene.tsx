@@ -88,18 +88,62 @@ function FeatureOverlays({
             const l = params.retentionLength;
             const w = params.retentionWidthY;
             const d = params.retentionDepthZ;
+            const r = Math.min(params.retentionCornerRadius, w * 0.45, l * 0.45);
+
+            const shape = new THREE.Shape();
+            if (r <= 0) {
+              shape.moveTo(0, -w / 2);
+              shape.lineTo(0, w / 2);
+              shape.lineTo(l, 0);
+              shape.closePath();
+            } else {
+              const alpha = Math.atan2(w / 2, l);
+              const cosA = Math.cos(alpha);
+              const sinA = Math.sin(alpha);
+              const dc = r / sinA;
+
+              shape.moveTo(0, -w / 2 + r);
+              shape.lineTo(0, w / 2 - r);
+              shape.absarc(r, w / 2 - r, r, Math.PI, Math.PI / 2 + alpha, true);
+              shape.lineTo(l - dc * cosA + r * sinA, r * cosA);
+              shape.absarc(l - dc * cosA, 0, r, alpha, -alpha, true);
+              shape.lineTo(r * sinA, -w / 2 + r * (1 - cosA));
+              shape.absarc(r, -w / 2 + r, r, -Math.PI / 2 - alpha, -Math.PI, true);
+            }
+
+            const points = shape.getPoints(24);
             const geometry = new THREE.BufferGeometry();
-            const vertices = new Float32Array([
-              0, -w / 2, 0, 0, w / 2, 0, 0, 0, d, l, 0, 0,
-              0, -w / 2, 0, 0, w / 2, 0, 0, 0, -d, l, 0, 0,
-            ]);
-            const indices = [0, 2, 1, 0, 3, 2, 1, 2, 3, 0, 1, 3, 4, 5, 6, 4, 6, 7, 5, 7, 6, 4, 7, 5];
-            geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
+            const vertices: number[] = [];
+            const indices: number[] = [];
+            points.forEach((p) => {
+              const f = Math.max(0, 1 - p.x / l);
+              vertices.push(p.x, p.y, d * f);
+              vertices.push(p.x, p.y, -d * f);
+              vertices.push(p.x, p.y, 0);
+            });
+            const n = points.length;
+            for (let i = 0; i < n - 1; i++) {
+              indices.push(i * 3, (i + 1) * 3, i * 3 + 2);
+              indices.push((i + 1) * 3, (i + 1) * 3 + 2, i * 3 + 2);
+              if (!params.retentionOneSide) {
+                indices.push(i * 3 + 1, (i + 1) * 3 + 1, i * 3 + 2);
+                indices.push((i + 1) * 3 + 1, (i + 1) * 3 + 2, i * 3 + 2);
+              }
+            }
+            geometry.setAttribute(
+              "position",
+              new THREE.BufferAttribute(new Float32Array(vertices), 3)
+            );
             geometry.setIndex(indices);
-            geometry.computeVertexNormals();
+
             return (
               <mesh geometry={geometry}>
-                <meshBasicMaterial color="#fbbf24" transparent opacity={0.3} wireframe />
+                <meshBasicMaterial
+                  color="#fbbf24"
+                  transparent
+                  opacity={0.3}
+                  wireframe
+                />
               </mesh>
             );
           })()}
@@ -372,9 +416,9 @@ function Plug({
   const plugMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: "#c9c2b4",
-        metalness: 0.15,
-        roughness: 0.55,
+        color: "#1a2b45",
+        metalness: 0.3,
+        roughness: 0.4,
         clippingPlanes: [plugClipPlane],
       }),
     [plugClipPlane]
@@ -392,10 +436,15 @@ function Plug({
   );
   const halfMaterial = useMemo(
     () =>
-      new THREE.MeshStandardMaterial({
-        color: "#c9c2b4",
-        metalness: 0.1,
-        roughness: 0.7,
+      new THREE.MeshPhysicalMaterial({
+        color: "#f2f6fa",
+        metalness: 0.2,
+        roughness: 0.35,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.08,
+        sheen: 0.5,
+        sheenColor: new THREE.Color("#dbe7f2"),
+        sheenRoughness: 0.25,
         side: THREE.DoubleSide,
         flatShading: true,
         polygonOffset: true,
@@ -532,6 +581,53 @@ function easeOutCubic(x: number) {
   return 1 - Math.pow(1 - x, 3);
 }
 
+function FeatureMarker({
+  coords,
+  color,
+}: {
+  coords: [number, number, number];
+  color: string;
+}) {
+  const ringRef = useRef<THREE.Mesh>(null);
+  const pulseRef = useRef<THREE.Mesh>(null);
+  useFrame(({ clock }) => {
+    const t = clock.getElapsedTime();
+    if (ringRef.current) {
+      ringRef.current.rotation.z = t * 0.6;
+    }
+    if (pulseRef.current) {
+      const s = 1 + Math.sin(t * 2.2) * 0.25;
+      pulseRef.current.scale.setScalar(s);
+      const mat = pulseRef.current.material as THREE.MeshBasicMaterial;
+      mat.opacity = 0.55 - Math.sin(t * 2.2) * 0.25;
+    }
+  });
+  return (
+    <group position={coords}>
+      <mesh>
+        <sphereGeometry args={[1.4, 16, 16]} />
+        <meshBasicMaterial color={color} />
+      </mesh>
+      <mesh ref={pulseRef}>
+        <sphereGeometry args={[2.2, 16, 16]} />
+        <meshBasicMaterial color={color} transparent opacity={0.35} />
+      </mesh>
+      <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[3.2, 3.7, 32]} />
+        <meshBasicMaterial color={color} transparent opacity={0.85} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh rotation={[0, 0, 0]}>
+        <ringGeometry args={[5.2, 5.35, 48, 1, 0, Math.PI / 3]} />
+        <meshBasicMaterial color={color} transparent opacity={0.9} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh rotation={[0, 0, Math.PI]}>
+        <ringGeometry args={[5.2, 5.35, 48, 1, 0, Math.PI / 3]} />
+        <meshBasicMaterial color={color} transparent opacity={0.9} side={THREE.DoubleSide} />
+      </mesh>
+    </group>
+  );
+}
+
 function CameraController({ isFlat }: { isFlat: boolean }) {
   const { camera, controls } = useThree();
   const lastIsFlat = useRef(isFlat);
@@ -571,12 +667,7 @@ function LoadedScene(props: SceneProps) {
       {step === 1.5 &&
         featurePoints.map(
           (fp) =>
-            fp.coords && (
-              <mesh key={fp.name} position={fp.coords}>
-                <sphereGeometry args={[2, 16, 16]} />
-                <meshBasicMaterial color={fp.color} />
-              </mesh>
-            )
+            fp.coords && <FeatureMarker key={fp.name} coords={fp.coords} color={fp.color} />
         )}
 
       {assets && (
@@ -598,7 +689,8 @@ export function Scene(props: SceneProps) {
 
   return (
     <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, localClippingEnabled: true }}>
-      <color attach="background" args={["#0f1012"]} />
+      <color attach="background" args={["#030710"]} />
+      <fog attach="fog" args={["#030710", 420, 1100]} />
 
       {isFlat ? (
         <OrthographicCamera makeDefault position={[0, 400, 0]} zoom={2.5} near={1} far={2000} />
@@ -607,21 +699,24 @@ export function Scene(props: SceneProps) {
       )}
 
       <CameraController isFlat={isFlat} />
-      <ambientLight intensity={0.4} />
+      <ambientLight intensity={0.35} color="#a8d8e8" />
       <directionalLight
         position={[120, 200, 120]}
-        intensity={1.1}
+        intensity={1.05}
+        color="#dff2ff"
         castShadow
         shadow-mapSize-width={1024}
         shadow-mapSize-height={1024}
       />
-      <directionalLight position={[-100, 60, -80]} intensity={0.35} />
+      <directionalLight position={[-100, 60, -80]} intensity={0.4} color="#3be0c9" />
+      <pointLight position={[0, -200, 0]} intensity={0.25} color="#0c5c7a" />
 
       <Suspense fallback={null}>
         <LoadedScene {...props} />
       </Suspense>
 
-      <gridHelper args={[400, 20, "#333", "#222"]} position={[0, -40, 0]} />
+      <gridHelper args={[400, 20, "#3be0c9", "#0a2a3a"]} position={[0, -40, 0]} />
+      <gridHelper args={[800, 4, "#0e4a5c", "#072030"]} position={[0, -40.1, 0]} />
 
       {isFlat ? (
         <MapControls target={[0, 0, 0]} enableRotate={false} screenSpacePanning={true} />

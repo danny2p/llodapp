@@ -226,191 +226,86 @@ def inject_triangular_retention_indent(cavity_bin: np.ndarray, origin: np.ndarra
                                        rotate_deg: float = 0.0,
                                        corner_radius: float = 0.0,
                                        ) -> tuple[np.ndarray, np.ndarray]:
-    """Carve a triangular, ramped-depth indentation INTO the cavity plug.
-    ... [docstring omitted for brevity] ...
-    """
+    import numpy as np
     nx, ny, nz = cavity_bin.shape
     cavity_f = cavity_bin.astype(np.float32)
+    half_w = width_y_mm / 2.0
+    if length_mm <= 0 or half_w <= 0 or depth_z_mm <= 0: return cavity_f, origin
 
-    half_w_mm = width_y_mm / 2.0
-    if length_mm <= 0 or half_w_mm <= 0 or depth_z_mm <= 0:
-        return cavity_f, origin
-
-    tg_front_gun_x = tg_data["bbox_min"][0]
-    flat_gun_x = tg_front_gun_x + front_offset_mm
-    flat_gun_y = tg_data["center"][1] + y_offset_mm
-
+    tg_front_x = tg_data["bbox_min"][0]
+    anchor_x = tg_front_x + front_offset_mm
+    anchor_y = tg_data["center"][1] + y_offset_mm
     theta = np.radians(rotate_deg)
     ct, st = np.cos(theta), np.sin(theta)
 
-    # AABB of the rotated triangle in gun-frame (gx, gy), then to (i, j).
-    corners_uv = [(0.0, -half_w_mm), (0.0, half_w_mm), (length_mm, 0.0)]
-    corner_gx = [flat_gun_x + u * ct - v * st for (u, v) in corners_uv]
-    corner_gy = [flat_gun_y + u * st + v * ct for (u, v) in corners_uv]
-
+    # Rounded Triangle SDF (standard primitive approach)
+    # We want to keep outer dimensions fixed, so we shrink the triangle by r.
+    r = min(corner_radius, half_w * 0.9, length_mm * 0.5)
+    
+    # Vertex angles and normal setup
+    m = half_w / length_mm
+    hyp = np.sqrt(half_w**2 + length_mm**2)
+    n_top = np.array([half_w, length_mm]) / hyp
+    n_bot = np.array([half_w, -length_mm]) / hyp
+    
+    # Bounding box
+    corners_uv = [(0.0, -half_w), (0.0, half_w), (length_mm, 0.0)]
+    corner_gx = [anchor_x + u * ct - v * st for (u, v) in corners_uv]
+    corner_gy = [anchor_y + u * st + v * ct for (u, v) in corners_uv]
     ci_vals = [insertion_vox - 1 - (g - origin[0]) / pitch for g in corner_gx]
     j_vals = [(g - origin[1]) / pitch for g in corner_gy]
-
-    i_lo = max(0, int(np.floor(min(ci_vals))) - 1)
-    i_hi = min(nx - 1, int(np.ceil(max(ci_vals))) + 1)
-    j_lo = max(0, int(np.floor(min(j_vals))) - 1)
-    j_hi = min(ny - 1, int(np.ceil(max(j_vals))) + 1)
-
-    # Pre-calculate SDF for corner rounding if radius > 0
-    # The triangle is bounded by three lines in (u, v) space:
-    # 1. u = 0 (the flat side)
-    # 2. v = (half_w / length) * u - half_w  => (half_w/length)*u - v - half_w = 0
-    # 3. v = -(half_w / length) * u + half_w => (half_w/length)*u + v - half_w = 0
-    # Normalizing the line equations for true distance: ax + by + c = 0 where a^2+b^2=1
-    m = half_w_mm / length_mm
-    denom = np.sqrt(m**2 + 1)
-    # Line 2: (m*u - v - half_w) / denom = 0
-    # Line 3: (m*u + v - half_w) / denom = 0
+    i_lo, i_hi = max(0, int(np.floor(min(ci_vals)))-2), min(nx-1, int(np.ceil(max(ci_vals)))+2)
+    j_lo, j_hi = max(0, int(np.floor(min(j_vals)))-2), min(ny-1, int(np.ceil(max(j_vals)))+2)
 
     for i in range(i_lo, i_hi + 1):
-        gx_i = origin[0] + (insertion_vox - 1 - i) * pitch
+        gx = origin[0] + (insertion_vox - 1 - i) * pitch
         for j in range(j_lo, j_hi + 1):
-            gy_j = origin[1] + (j + 0.5) * pitch
-            dx = gx_i - flat_gun_x
-            dy = gy_j - flat_gun_y
-            u = dx * ct + dy * st
-            v = -dx * st + dy * ct
-
-            # 2D Signed Distance Field for the triangle
-            d1 = -u # distance from flat side (positive is inside triangle)
-            d2 = (m * u - v - half_w_mm) / denom
-            d3 = (m * u + v - half_w_mm) / denom
+            gy = origin[1] + (j + 0.5) * pitch
+            du, dv = gx - anchor_x, gy - anchor_y
+            u, v = du * ct + dv * st, -du * st + dv * ct
             
-            # The distance to the triangle boundary is max(d1, d2, d3)
-            # We want to keep points where dist <= 0
-            dist = max(d1, d2, d3)
-
-            # Apply corner rounding if requested
-            is_inside = False
-            if corner_radius <= 0:
-                if dist <= 0:
-                    is_inside = True
+            # Distance to shrunken lines
+            sd1 = -u + r
+            sd2 = (u * n_top[0] + (v - half_w) * n_top[1]) + r
+            sd3 = (u * n_bot[0] + (v + half_w) * n_bot[1]) + r
+            
+            d_shrunken = max(sd1, sd2, sd3)
+            if r <= 0:
+                dist = d_shrunken
             else:
-                # To round corners, we check if we are within corner_radius of the "inner" triangle
-                # formed by offsetting the edges inward by corner_radius.
-                # However, a simpler way for SDF rounding is: 
-                # dist_rounded = length(max(vec2(d1,d2,d3) + radius, 0)) - radius
-                # But here we just want to check if the point is inside the "rounded" shape.
-                # A common trick: if at least two edges are within radius of the point, 
-                # we are in a corner zone.
-                if dist <= 0:
-                    # Point is inside the sharp triangle.
-                    # Is it in a corner? Check if it's near >1 edge.
-                    # Actually, for a rounded convex hull of 3 points, we can just use the 
-                    # standard SDF for a triangle and then subtract radius.
-                    # We'll use a simpler version: if the point is inside the "inner" triangle
-                    # (offset by r), it's definitely in. If it's outside the inner triangle, 
-                    # but within r of any of the 3 corners, it's also in.
-                    
-                    # Offset the triangle edges inward
-                    r = corner_radius
-                    # This is slightly complex to do perfectly in-place, so let's stick to 
-                    # the "mask" approach. 
-                    if dist <= -r:
-                        is_inside = True
-                    else:
-                        # Near the edge. Check corners.
-                        # Corner 1 (flat/top): (0, half_w)
-                        # Corner 2 (flat/bottom): (0, -half_w)
-                        # Corner 3 (point): (length, 0)
-                        # But wait, we need to offset the corners too...
-                        # Actually, a triangle with rounded corners is just the locus of points
-                        # whose distance to an "inner" triangle is <= r.
-                        # To keep the EXACT same outer dimensions, the inner triangle must be
-                        # shrunken by r / sin(half_angle).
-                        
-                        # Alternative: Just use the sharp triangle but "soften" the inclusion check
-                        # using the smooth-max or just check distance to the line segments.
-                        is_inside = True # Fallback to sharp if radius logic is too slow/complex
-                
-                # REVISED ROUNDING: Just use the sharp triangle but apply the 2D SDF
-                # Check distance to the corners if we are "inside" but near the tips.
-                # To keep it simple and fast for a voxel loop:
-                if dist <= 0:
-                    is_inside = True
-                    # If we are near a vertex, check if we are outside the circle
-                    # This is more like "clipping" the corners.
-                    r = corner_radius
-                    # Vertex 3 (The point at u=length, v=0)
-                    # The interior angle at the point is 2 * atan(half_w / length)
-                    half_angle = np.arctan(m)
-                    # Distance from vertex to the center of the rounding circle
-                    dist_to_circle_center = r / np.sin(half_angle)
-                    center_u = length_mm - dist_to_circle_center * np.cos(half_angle)
-                    # If we are beyond the circle center in U, check radius
-                    if u > center_u:
-                        du = u - center_u
-                        dv = abs(v)
-                        # This is a bit rough but works for the point
-                        if np.sqrt(du**2 + dv**2) > r:
-                            # is_inside = False -- wait, this only clips the tip.
-                            # For now, let's just let the smooth-sigma handle the fine rounding
-                            # and focus on the functional geometry.
-                            pass
+                if d_shrunken <= 0:
+                    dist = d_shrunken - r
+                else:
+                    # In corner zones
+                    dist = d_shrunken - r
+                    if sd1 > 0 and sd2 > 0: dist = np.sqrt(sd1**2 + sd2**2) - r
+                    elif sd1 > 0 and sd3 > 0: dist = np.sqrt(sd1**2 + sd3**2) - r
+                    elif sd2 > 0 and sd3 > 0: dist = np.sqrt(sd2**2 + sd3**2) - r
 
-            if not is_inside:
-                continue
-
-            frac = 1.0 - u / length_mm
-            depth_here_mm = depth_z_mm * frac
-            if depth_here_mm <= 0.0:
-                continue
-
-            # Anti-aliasing / weighting logic
-            # Use 'dist' as a weight for the edge.
-            v_cov = 1.0
-            if dist > -pitch and dist <= 0:
-                v_cov = abs(dist) / pitch
-            elif dist > 0:
-                continue
-
-            depth_vox = depth_here_mm / pitch
-            z_full = int(np.floor(depth_vox))
-            z_frac = depth_vox - z_full
-
+            if dist > 0: continue
+            
+            v_cov = min(1.0, abs(dist) / pitch) if dist > -pitch else 1.0
+            frac = max(0.0, min(1.0, 1.0 - u / length_mm))
+            depth_vox = (depth_z_mm * frac) / pitch
+            z_full, z_frac = int(np.floor(depth_vox)), depth_vox - np.floor(depth_vox)
+            
             col = cavity_bin[i, j, :]
-            if not col.any():
-                continue
+            if not col.any(): continue
             zs = np.where(col)[0]
-            z_max = int(zs.max())
-            z_min = int(zs.min())
-
-            for k in range(z_full):
-                idx = z_max - k
-                if z_min <= idx <= z_max:
-                    new_v = 1.0 - v_cov
-                    if cavity_f[i, j, idx] > new_v:
-                        cavity_f[i, j, idx] = new_v
-            if z_frac > 0.0:
-                idx = z_max - z_full
-                if z_min <= idx <= z_max:
-                    new_v = 1.0 - v_cov * z_frac
-                    if cavity_f[i, j, idx] > new_v:
-                        cavity_f[i, j, idx] = new_v
-
-            if both_sides:
-                for k in range(z_full):
-                    idx = z_min + k
-                    if z_min <= idx <= z_max:
-                        new_v = 1.0 - v_cov
-                        if cavity_f[i, j, idx] > new_v:
-                            cavity_f[i, j, idx] = new_v
-                if z_frac > 0.0:
-                    idx = z_min + z_full
-                    if z_min <= idx <= z_max:
-                        new_v = 1.0 - v_cov * z_frac
-                        if cavity_f[i, j, idx] > new_v:
-                            cavity_f[i, j, idx] = new_v
+            z_max, z_min = int(zs.max()), int(zs.min())
+            
+            for k_off in range(z_full + 1):
+                dens = v_cov
+                if k_off > depth_vox: continue
+                if k_off + 1 > depth_vox: dens *= z_frac
+                
+                idx_pos, idx_neg = z_max - k_off, z_min + k_off
+                if z_min <= idx_pos <= z_max:
+                    cavity_f[i, j, idx_pos] = min(cavity_f[i, j, idx_pos], 1.0 - dens)
+                if both_sides and z_min <= idx_neg <= z_max:
+                    cavity_f[i, j, idx_neg] = min(cavity_f[i, j, idx_neg], 1.0 - dens)
 
     return cavity_f, origin
-
-    return cavity_f, origin
-
 
 def inject_slide_release_relief(cavity_bin, origin, pitch, sr_coords, insertion_vox, width_y_mm, depth_z_mm, y_offset_mm, chamfer_mm=0.0):
     import numpy as np
@@ -418,72 +313,64 @@ def inject_slide_release_relief(cavity_bin, origin, pitch, sr_coords, insertion_
     cavity_f = cavity_bin.astype("float32")
     
     # 1. Coordinate Math
-    # !!! CRITICAL AI / DEVELOPER NOTE !!!
-    # WORLD SPACE: Muzzle is -X, Grip/Entrance is +X.
-    # VOXEL SPACE: Grid is SWEPT, reversing X. Index 0 is the ENTRANCE (Grip).
-    # i_start is the button position. Carving from 0 to i_start creates 
-    # the clearance path toward the holster opening (the grip).
-    # Entrance is index 0, Button is i_start. Aligned gun has muzzle at min X.
+    # Entrance is index 0, Button is i_start.
     i_start = int((insertion_vox - 1) - round((sr_coords[0] - origin[0]) / pitch))
     j_c = int(round((sr_coords[1] + y_offset_mm - origin[1]) / pitch))
-    k_tag = int(round((sr_coords[2] - origin[2]) / pitch))
+    k_tag_vox = (sr_coords[2] - origin[2]) / pitch
 
     # 2. Side detection (Positive or Negative Z relative to gun center)
-    col_sample = cavity_bin[max(0, min(i_start, nx-1)), max(0, min(j_c, ny-1)), :]
-    if col_sample.any():
-        zs = np.where(col_sample)[0]
-        z_mid = (zs.min() + zs.max()) / 2.0
-        is_positive_side = k_tag > z_mid
-    else:
-        is_positive_side = k_tag > (nz / 2.0)
+    # We use a global grid center for the "interior" reference to ensure we fill outward.
+    z_mid_vox = nz / 2.0
+    is_positive_side = k_tag_vox > z_mid_vox
 
     # 3. Geometric Constants
     half_w_mm = width_y_mm / 2.0
     j0 = max(0, int(np.floor(j_c - (half_w_mm / pitch))))
     j1 = min(ny - 1, int(np.ceil(j_c + (half_w_mm / pitch))))
     
+    # Target absolute Z plane (the "ceiling" of the relief)
+    # This matches the 3D preview which starts at sr_coords[2] and goes out by depth_z_mm.
+    target_z_world = sr_coords[2] + (depth_z_mm if is_positive_side else -depth_z_mm)
+    target_k_vox = (target_z_world - origin[2]) / pitch
+    
     # 4. Carving Loop
     for i in range(0, i_start + 1):
-        # Distance to leading edge (the button end)
         x_dist_mm = (i_start - i) * pitch
-        
         for j in range(j0, j1 + 1):
-            # Distance to longitudinal side edges
             y_dist_mm = half_w_mm - abs(j - j_c) * pitch
             
-            # 3D Chamfer Logic: The "allowed depth" is reduced near any edge
-            # min_dist is distance to nearest edge in XY plane
+            # 3D Chamfer: we reduce the target_k_vox near edges
             min_dist_edge = min(max(0, x_dist_mm), max(0, y_dist_mm))
             
-            current_max_depth = depth_z_mm
-            if chamfer_mm > 0:
-                if min_dist_edge < chamfer_mm:
-                    # Linear ramp: at edge (dist=0) depth is (depth - chamfer)
-                    # at dist=chamfer, depth is full.
-                    current_max_depth = depth_z_mm - (chamfer_mm - min_dist_edge)
+            local_target_k = target_k_vox
+            if chamfer_mm > 0 and min_dist_edge < chamfer_mm:
+                # Reduce the depth of the plane near edges
+                offset_vox = (chamfer_mm - min_dist_edge) / pitch
+                local_target_k = target_k_vox - (offset_vox if is_positive_side else -offset_vox)
             
-            if current_max_depth <= 0:
-                continue
-
-            col = cavity_bin[i, j, :]
-            if not col.any(): continue
-            zs = np.where(col)[0]
-            z_surf = int(zs.max()) if is_positive_side else int(zs.min())
-            
-            # Apply growth with sub-voxel precision via float densities
-            depth_vox = current_max_depth / pitch
-            
-            for v_off in range(int(np.ceil(depth_vox)) + 1):
-                density = 1.0
-                if v_off > depth_vox: continue
-                if v_off + 1 > depth_vox:
-                    density = depth_vox - v_off
-                
-                k = z_surf + v_off if is_positive_side else z_surf - v_off
-                if 0 <= k < nz:
-                    # Union operation: take max density
-                    if density > cavity_f[i, j, k]:
-                        cavity_f[i, j, k] = density
+            # Fill from the gun center out to the target plane
+            if is_positive_side:
+                k_start = int(np.floor(z_mid_vox))
+                k_end_float = local_target_k
+                for k in range(k_start, int(np.ceil(k_end_float)) + 1):
+                    if 0 <= k < nz:
+                        density = 1.0
+                        if k > k_end_float: continue
+                        if k + 1 > k_end_float:
+                            density = k_end_float - k
+                        if density > cavity_f[i, j, k]:
+                            cavity_f[i, j, k] = density
+            else:
+                k_start = int(np.ceil(z_mid_vox))
+                k_end_float = local_target_k
+                for k in range(int(np.floor(k_end_float)), k_start + 1):
+                    if 0 <= k < nz:
+                        density = 1.0
+                        if k < k_end_float: continue
+                        if k - 1 < k_end_float:
+                            density = k - k_end_float
+                        if density > cavity_f[i, j, k]:
+                            cavity_f[i, j, k] = density
 
     return cavity_f, origin
 
@@ -621,11 +508,13 @@ def main() -> None:
     console.rule("Voxelize + sweep")
     occupancy, origin = voxelize_filled(aligned, args.voxel_pitch)
     
-    # Pad the voxel grid in Z to provide headroom for carved relief channels
-    # We add 20mm of headroom (10mm each side) which is plenty for our 6-12mm reliefs.
+    # Pad the voxel grid in Y and Z to provide headroom for offset relief channels
+    # We add headroom on all sides except X (sweep takes care of X).
     pad_mm = 15.0
     pad_vox = int(np.ceil(pad_mm / args.voxel_pitch))
-    occupancy = np.pad(occupancy, ((0, 0), (0, 0), (pad_vox, pad_vox)), mode="constant", constant_values=0)
+    # Padding: ((x_min, x_max), (y_min, y_max), (z_min, z_max))
+    occupancy = np.pad(occupancy, ((0, 0), (pad_vox, pad_vox), (pad_vox, pad_vox)), mode="constant", constant_values=0)
+    origin[1] -= pad_vox * args.voxel_pitch
     origin[2] -= pad_vox * args.voxel_pitch
     
     console.print(f"voxel grid: {occupancy.shape}, {int(occupancy.sum()):,} filled")
