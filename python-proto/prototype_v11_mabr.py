@@ -530,10 +530,9 @@ def main() -> None:
         state = features_state[fid]
         pts = state.get("points") or []
         
-        # Only skip if the feature DEFINES points but hasn't tagged any.
-        # Automatic features (0 points) should always run.
-        expected_pts = FEATURES_BY_ID.get(fid, {}).get("points", [])
-        if len(expected_pts) > 0 and (not pts or pts[0] is None):
+        # Only skip if the feature HAS tag slots but they are all empty.
+        # Automatic features have 0 slots (pts=[]) and should never be skipped.
+        if pts and pts[0] is None:
             console.print(f"[yellow]{fid}: enabled but not tagged; skipping[/yellow]")
             continue
             
