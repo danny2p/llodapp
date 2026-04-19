@@ -27,10 +27,11 @@ from rich.console import Console
 from scipy.spatial import ConvexHull
 
 from prototype_v3_snap import iterative_ransac
+from detect_features import detect_trigger_guard
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 OUT_DIR = Path(__file__).resolve().parent / "out"
-INPUT_STL = PROJECT_DIR / "sig.stl"
+DEFAULT_INPUT_STL = PROJECT_DIR / "sig.stl"
 
 VOXEL_PITCH_MM = 0.5
 INSERTION_DEPTH_MM = 160.0
@@ -206,10 +207,142 @@ def sweep_cavity(gun_vox: np.ndarray, insertion_depth_vox: int) -> np.ndarray:
     return cavity
 
 
-def cavity_to_mesh(cavity: np.ndarray, origin: np.ndarray, pitch: float) -> trimesh.Trimesh:
+def inject_triangular_retention_indent(cavity_bin: np.ndarray, origin: np.ndarray, pitch: float,
+                                       tg_data: dict, insertion_vox: int,
+                                       front_offset_mm: float, length_mm: float,
+                                       width_y_mm: float, depth_z_mm: float,
+                                       y_offset_mm: float, both_sides: bool,
+                                       rotate_deg: float = 0.0,
+                                       ) -> tuple[np.ndarray, np.ndarray]:
+    """Carve a triangular, ramped-depth indentation INTO the cavity plug.
+
+    The kydex molded onto this plug will form a matching bump in that
+    indentation — on extraction, the gun's TG front edge hits the bump and
+    has to climb out, providing retention.
+
+    Gun-frame geometry, in a rotated local (u, v) frame anchored at the
+    flat-side midpoint:
+      - u = 0 is the flat side (full width_y, max depth_z carved)
+      - u = length_mm is the point (zero width, zero depth)
+      - v is perpendicular, ranging |v| ≤ (1 - u/length) * width_y/2
+      - rotate_deg rotates the (u, v) frame around +Z in the gun frame. 0°
+        points the triangle at the muzzle (legacy behavior); positive
+        rotates the point CCW when viewed down -Z.
+
+    Anti-aliased: returns a FLOAT density field in [0, 1]. A voxel partially
+    carved gets density = 1 - (carve coverage), so marching cubes at 0.5
+    produces smooth diagonal walls instead of voxel staircases.
+    """
+    nx, ny, nz = cavity_bin.shape
+    cavity_f = cavity_bin.astype(np.float32)
+
+    half_w_mm = width_y_mm / 2.0
+    if length_mm <= 0 or half_w_mm <= 0 or depth_z_mm <= 0:
+        return cavity_f, origin
+
+    tg_front_gun_x = tg_data["bbox_min"][0]
+    flat_gun_x = tg_front_gun_x + front_offset_mm
+    flat_gun_y = tg_data["center"][1] + y_offset_mm
+
+    theta = np.radians(rotate_deg)
+    ct, st = np.cos(theta), np.sin(theta)
+
+    # AABB of the rotated triangle in gun-frame (gx, gy), then to (i, j).
+    # Corners are the two flat endpoints and the point.
+    corners_uv = [(0.0, -half_w_mm), (0.0, half_w_mm), (length_mm, 0.0)]
+    corner_gx = [flat_gun_x + u * ct - v * st for (u, v) in corners_uv]
+    corner_gy = [flat_gun_y + u * st + v * ct for (u, v) in corners_uv]
+
+    # cavity_i = insertion_vox - 1 - (gx - origin[0]) / pitch
+    ci_vals = [insertion_vox - 1 - (g - origin[0]) / pitch for g in corner_gx]
+    j_vals = [(g - origin[1]) / pitch for g in corner_gy]
+
+    # 1-voxel margin so the AA band at triangle edges is preserved.
+    i_lo = max(0, int(np.floor(min(ci_vals))) - 1)
+    i_hi = min(nx - 1, int(np.ceil(max(ci_vals))) + 1)
+    j_lo = max(0, int(np.floor(min(j_vals))) - 1)
+    j_hi = min(ny - 1, int(np.ceil(max(j_vals))) + 1)
+
+    for i in range(i_lo, i_hi + 1):
+        gx_i = origin[0] + (insertion_vox - 1 - i) * pitch
+        for j in range(j_lo, j_hi + 1):
+            gy_j = origin[1] + (j + 0.5) * pitch  # use voxel center in Y
+            # Voxel center in gun frame; X already expresses the cavity
+            # column center because the sweep is aligned with the grid.
+            dx = gx_i - flat_gun_x
+            dy = gy_j - flat_gun_y
+            u = dx * ct + dy * st
+            v = -dx * st + dy * ct
+            if u < 0.0 or u > length_mm:
+                continue
+            frac = 1.0 - u / length_mm  # 0 at point, 1 at flat
+            half_w_here = half_w_mm * frac
+            depth_here_mm = depth_z_mm * frac
+            if half_w_here <= 0.0 or depth_here_mm <= 0.0:
+                continue
+
+            # AA in v: treat voxel as 1 pitch wide perpendicular to the
+            # rotated width axis. An exact rotated-voxel overlap would need
+            # a polygon clip; Gaussian smoothing upstream absorbs the slop.
+            v_vox = abs(v) / pitch
+            half_w_vox = half_w_here / pitch
+            if v_vox + 0.5 <= half_w_vox:
+                v_cov = 1.0
+            elif v_vox - 0.5 >= half_w_vox:
+                continue
+            else:
+                v_cov = float(half_w_vox - (v_vox - 0.5))
+
+            depth_vox = depth_here_mm / pitch
+            z_full = int(np.floor(depth_vox))
+            z_frac = depth_vox - z_full
+
+            col = cavity_bin[i, j, :]
+            if not col.any():
+                continue
+            zs = np.where(col)[0]
+            z_max = int(zs.max())
+            z_min = int(zs.min())
+
+            # Carve from +Z surface inward.
+            for k in range(z_full):
+                idx = z_max - k
+                if z_min <= idx <= z_max:
+                    new_v = 1.0 - v_cov
+                    if cavity_f[i, j, idx] > new_v:
+                        cavity_f[i, j, idx] = new_v
+            if z_frac > 0.0:
+                idx = z_max - z_full
+                if z_min <= idx <= z_max:
+                    new_v = 1.0 - v_cov * z_frac
+                    if cavity_f[i, j, idx] > new_v:
+                        cavity_f[i, j, idx] = new_v
+
+            if both_sides:
+                for k in range(z_full):
+                    idx = z_min + k
+                    if z_min <= idx <= z_max:
+                        new_v = 1.0 - v_cov
+                        if cavity_f[i, j, idx] > new_v:
+                            cavity_f[i, j, idx] = new_v
+                if z_frac > 0.0:
+                    idx = z_min + z_full
+                    if z_min <= idx <= z_max:
+                        new_v = 1.0 - v_cov * z_frac
+                        if cavity_f[i, j, idx] > new_v:
+                            cavity_f[i, j, idx] = new_v
+
+    return cavity_f, origin
+
+
+def cavity_to_mesh(cavity: np.ndarray, origin: np.ndarray, pitch: float,
+                   smooth_sigma: float = 0.0) -> trimesh.Trimesh:
     from skimage import measure
-    padded = np.pad(cavity, 1, mode="constant", constant_values=False)
-    verts, faces, _, _ = measure.marching_cubes(padded.astype(np.float32), level=0.5)
+    from scipy.ndimage import gaussian_filter
+    padded = np.pad(cavity, 1, mode="constant", constant_values=False).astype(np.float32)
+    if smooth_sigma > 0:
+        padded = gaussian_filter(padded, sigma=smooth_sigma)
+    verts, faces, _, _ = measure.marching_cubes(padded, level=0.5)
     verts = (verts - 1) * pitch + origin
     m = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
     m.merge_vertices()
@@ -218,14 +351,50 @@ def cavity_to_mesh(cavity: np.ndarray, origin: np.ndarray, pitch: float) -> trim
 
 def main() -> None:
     parser = argparse.ArgumentParser()
+    parser.add_argument("--input", type=str, default=str(DEFAULT_INPUT_STL),
+                        help="Path to input STL (default: sig.stl at project root).")
     parser.add_argument("--rotate-z-deg", type=float, default=0.0,
                         help="Additional rotation around Z after auto alignment (to correct MABR errors).")
     parser.add_argument("--mirror", action="store_true",
                         help="Mirror across XY plane (flip Z). Use if slide release/ejection side comes out wrong.")
+    parser.add_argument("--retention", action="store_true",
+                        help="Add a triangular retention bump behind the trigger guard's front edge.")
+    parser.add_argument("--retention-front-offset", type=float, default=4.0,
+                        help="mm behind TG front edge where the triangle's FLAT side starts.")
+    parser.add_argument("--retention-length", type=float, default=16.0,
+                        help="Triangle length along gun X, from flat side to point (mm).")
+    parser.add_argument("--retention-width-y", type=float, default=14.0,
+                        help="Triangle width at the flat side, in Y (mm).")
+    parser.add_argument("--retention-depth-z", type=float, default=4.0,
+                        help="Max bump outward depth at the flat side (mm). Ramps linearly to 0 at the point.")
+    parser.add_argument("--retention-y-offset", type=float, default=0.0,
+                        help="Y offset from trigger-guard center to triangle center (mm, +Y in aligned frame).")
+    parser.add_argument("--retention-rotate-deg", type=float, default=0.0,
+                        help="Rotate the retention triangle around +Z, anchored at the flat-side midpoint. "
+                             "0 points at the muzzle; positive rotates CCW looking down -Z.")
+    parser.add_argument("--smooth-sigma", type=float, default=0.8,
+                        help="Gaussian sigma (voxels) for cavity-grid smoothing; 0 disables.")
+    parser.add_argument("--voxel-pitch", type=float, default=VOXEL_PITCH_MM,
+                        help=f"Voxel grid pitch in mm (default {VOXEL_PITCH_MM}). "
+                             "Lower = more detail, quadratically more compute/memory.")
+    parser.add_argument("--retention-one-side", action="store_true",
+                        help="Only add bump to +Z side (default: both sides).")
+    parser.add_argument("--out-dir", type=str, default=None,
+                        help="Directory for output STLs (default: python-proto/out).")
+    parser.add_argument("--decim-target", type=int, default=None,
+                        help="If set, only write a single decimated plug at this target (skips other variants).")
+    parser.add_argument("--gun-decim-target", type=int, default=60_000,
+                        help="Face count for the aligned gun export (web needs this compact).")
     args = parser.parse_args()
 
+    input_path = Path(args.input).resolve()
+    stem = input_path.stem
+    out_dir = Path(args.out_dir).resolve() if args.out_dir else OUT_DIR
+    out_dir.mkdir(parents=True, exist_ok=True)
+
     console = Console()
-    raw: trimesh.Trimesh = trimesh.load_mesh(INPUT_STL, process=True)
+    console.print(f"input: {input_path.relative_to(PROJECT_DIR)}")
+    raw: trimesh.Trimesh = trimesh.load_mesh(input_path, process=True)
     raw.merge_vertices()
     console.rule("Load")
     console.print(f"raw: {len(raw.faces):,} faces, bbox {raw.bounds[1] - raw.bounds[0]}")
@@ -259,27 +428,78 @@ def main() -> None:
     suffix = f"_rz{int(args.rotate_z_deg)}" if args.rotate_z_deg else ""
     if args.mirror:
         suffix += "_mir"
-    aligned_out = OUT_DIR / f"sig_mabr_aligned{suffix}.stl"
+    if args.retention:
+        suffix += "_ret"
+    aligned_out = out_dir / f"{stem}_mabr_aligned{suffix}.stl"
     aligned.export(aligned_out)
-    gizmos_out = OUT_DIR / "axis_gizmos.stl"
-    make_axis_gizmos().export(gizmos_out)
-    console.print(f"wrote {aligned_out.relative_to(PROJECT_DIR)}")
-    console.print(f"wrote {gizmos_out.relative_to(PROJECT_DIR)}")
+    console.print(f"wrote {aligned_out.name}  faces={len(aligned.faces):,}")
+    if args.gun_decim_target and args.gun_decim_target < len(aligned.faces):
+        gun_dec = decimate(aligned, args.gun_decim_target)
+        gun_dec_out = out_dir / f"{stem}_mabr_aligned_decim{args.gun_decim_target}{suffix}.stl"
+        gun_dec.export(gun_dec_out)
+        console.print(f"wrote {gun_dec_out.name}  faces={len(gun_dec.faces):,}")
 
     console.rule("Voxelize + sweep")
-    occupancy, origin = voxelize_filled(aligned, VOXEL_PITCH_MM)
+    occupancy, origin = voxelize_filled(aligned, args.voxel_pitch)
     console.print(f"voxel grid: {occupancy.shape}, {int(occupancy.sum()):,} filled")
-    insertion_vox = int(round(INSERTION_DEPTH_MM / VOXEL_PITCH_MM))
+    insertion_vox = int(round(INSERTION_DEPTH_MM / args.voxel_pitch))
     cavity = sweep_cavity(occupancy, insertion_vox)
 
-    mesh = cavity_to_mesh(cavity, origin, VOXEL_PITCH_MM)
+    cavity_origin = origin
+    console.rule("Detect trigger guard")
+    tg = detect_trigger_guard(occupancy, origin, args.voxel_pitch, console)
+    if tg is not None:
+        # Persist TG anchor so the UI can draw a live retention-triangle
+        # overlay without re-running the pipeline.
+        import json
+        tg_json_path = out_dir / "tg.json"
+        tg_json_path.write_text(json.dumps({
+            "tg_front_x": float(tg["bbox_min"][0]),
+            "tg_center_y": float(tg["center"][1]),
+            "tg_center_z": float(tg["center"][2]),
+        }))
+        console.print(f"wrote {tg_json_path.name}")
+    if args.retention:
+        if tg is None:
+            console.print("[yellow]no trigger guard detected; skipping retention[/yellow]")
+        else:
+            console.rule("Inject retention bump")
+            cavity, cavity_origin = inject_triangular_retention_indent(
+                cavity, origin, args.voxel_pitch,
+                tg_data=tg,
+                insertion_vox=insertion_vox,
+                front_offset_mm=args.retention_front_offset,
+                length_mm=args.retention_length,
+                width_y_mm=args.retention_width_y,
+                depth_z_mm=args.retention_depth_z,
+                y_offset_mm=args.retention_y_offset,
+                both_sides=not args.retention_one_side,
+                rotate_deg=args.retention_rotate_deg,
+            )
+            console.print(f"retention triangle: flat at TG_front+{args.retention_front_offset}mm, "
+                          f"length {args.retention_length}mm, width {args.retention_width_y}mm, "
+                          f"depth {args.retention_depth_z}mm, y_offset {args.retention_y_offset:+.1f}mm, "
+                          f"rotate_z {args.retention_rotate_deg:+.1f}°, "
+                          f"{'both' if not args.retention_one_side else '+Z'} sides")
+
+    mesh = cavity_to_mesh(cavity, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma)
     console.print(f"MC mesh: {len(mesh.faces):,} faces, watertight={mesh.is_watertight}")
 
-    for target in (8_000, 15_000, 30_000):
+    if args.decim_target is None:
+        raw_out = out_dir / f"{stem}_swept_mabr_{int(INSERTION_DEPTH_MM)}mm_raw{suffix}.stl"
+        mesh.export(raw_out)
+        console.print(f"wrote {raw_out.name}  faces={len(mesh.faces):,}")
+        targets = (8_000, 15_000, 30_000, 120_000)
+    else:
+        targets = (args.decim_target,)
+
+    for target in targets:
+        if target >= len(mesh.faces):
+            continue
         dec = decimate(mesh, target)
-        out = OUT_DIR / f"swept_mabr_{int(INSERTION_DEPTH_MM)}mm_decim{target}{suffix}.stl"
+        out = out_dir / f"{stem}_swept_mabr_{int(INSERTION_DEPTH_MM)}mm_decim{target}{suffix}.stl"
         dec.export(out)
-        console.print(f"wrote {out.relative_to(PROJECT_DIR)}  faces={len(dec.faces):,}")
+        console.print(f"wrote {out.name}  faces={len(dec.faces):,}")
 
 
 if __name__ == "__main__":
