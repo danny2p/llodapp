@@ -272,6 +272,7 @@ function MoldAssets({
   viewMode,
   placedAccessories,
   activeAccessoryId,
+  onUpdateAccessory,
   onSetActiveAccessory,
 }: {
   assets: SceneAssets;
@@ -279,6 +280,7 @@ function MoldAssets({
   viewMode: ViewMode;
   placedAccessories: PlacedAccessory[];
   activeAccessoryId: string | null;
+  onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSetActiveAccessory: (id: string | null) => void;
 }) {
   const [full, left, right, gun] = useLoader(STLLoader, [
@@ -716,6 +718,7 @@ function LoadedScene(props: SceneProps) {
           viewMode={viewMode}
           placedAccessories={props.placedAccessories}
           activeAccessoryId={props.activeAccessoryId}
+          onUpdateAccessory={onUpdateAccessory}
           onSetActiveAccessory={props.onSetActiveAccessory}
         />
       )}
