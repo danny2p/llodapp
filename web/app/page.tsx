@@ -29,6 +29,7 @@ import {
   Sparkles,
   Radio,
   Power,
+  Settings2,
 } from "lucide-react";
 import {
   Panel,
@@ -562,6 +563,7 @@ export default function Page() {
           <div className="p-3 flex flex-col gap-3">
             <StepContext
               step={step}
+              setStep={setStep}
               featureStates={featureStates}
               activeTag={activeTag}
               setActiveTag={setActiveTag}
@@ -850,6 +852,7 @@ function StepRail({ step }: { step: Step }) {
 
 function StepContext(props: {
   step: Step;
+  setStep: (s: Step) => void;
   featureStates: FeatureStates;
   activeTag: ActiveTag;
   setActiveTag: (t: ActiveTag) => void;
@@ -880,6 +883,7 @@ function StepContext(props: {
 }) {
   const {
     step,
+    setStep,
     featureStates,
     activeTag,
     setActiveTag,
@@ -968,21 +972,22 @@ function StepContext(props: {
       )}
 
       {step === 3 && assets && (
-        <ExportPanel
-          viewMode={viewMode}
-          setViewMode={setViewMode}
-          assets={assets}
-          accessories={accessories}
-          placedAccessories={placedAccessories}
-          activeAccessoryId={activeAccessoryId}
-          setActiveAccessoryId={setActiveAccessoryId}
-          addAccessory={addAccessory}
-          updateAccessory={updateAccessory}
-          removeAccessory={removeAccessory}
-          downloadHalf={downloadHalf}
-          stem={stem}
-          reset={reset}
-        />
+          <ExportPanel
+            viewMode={viewMode}
+            setViewMode={setViewMode}
+            assets={assets}
+            accessories={accessories}
+            placedAccessories={placedAccessories}
+            activeAccessoryId={activeAccessoryId}
+            setActiveAccessoryId={setActiveAccessoryId}
+            addAccessory={addAccessory}
+            updateAccessory={updateAccessory}
+            removeAccessory={removeAccessory}
+            downloadHalf={downloadHalf}
+            stem={stem}
+            reset={reset}
+            onRerun={() => setStep(1.5)}
+          />
       )}
     </Panel>
   );
@@ -1379,6 +1384,7 @@ function ExportPanel({
   downloadHalf,
   stem,
   reset,
+  onRerun,
   assets,
 }: {
   viewMode: ViewMode;
@@ -1394,6 +1400,7 @@ function ExportPanel({
   downloadHalf: (side: "left" | "right") => void;
   stem: string;
   reset: () => void;
+  onRerun: () => void;
 }) {
   const sideAcc = placedAccessories.filter((a) => a.side === viewMode);
   const leftCount = placedAccessories.filter((a) => a.side === "left").length;
@@ -1538,13 +1545,22 @@ function ExportPanel({
             )}
           </Button>
         </div>
-        <button
-          onClick={reset}
-          className="text-[10px] font-mono uppercase tracking-wider text-[var(--hud-text-faint)] hover:text-[var(--hud-amber-bright)] mt-1 flex items-center justify-center gap-1.5 transition-colors py-1"
-        >
-          <RotateCcw size={10} />
-          New Session · Clear State
-        </button>
+        <div className="grid grid-cols-2 gap-1.5 mt-1">
+          <button
+            onClick={onRerun}
+            className="text-[10px] font-mono uppercase tracking-wider text-[var(--hud-text-dim)] hover:text-[var(--hud-teal-bright)] flex items-center justify-center gap-1.5 transition-colors py-1 bg-[var(--hud-panel-2)] border border-[var(--hud-line)]"
+          >
+            <Settings2 size={10} />
+            Rebuild / Adjust
+          </button>
+          <button
+            onClick={reset}
+            className="text-[10px] font-mono uppercase tracking-wider text-[var(--hud-text-faint)] hover:text-[var(--hud-amber-bright)] flex items-center justify-center gap-1.5 transition-colors py-1 bg-[var(--hud-panel-2)] border border-[var(--hud-line)]"
+          >
+            <RotateCcw size={10} />
+            New Session
+          </button>
+        </div>
       </div>
     </div>
   );
