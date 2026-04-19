@@ -97,10 +97,12 @@ function PickingGun({
   url,
   activeTag,
   onTagPoint,
+  gunColor,
 }: {
   url: string;
   activeTag: ActiveTag;
   onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
+  gunColor: string;
 }) {
   const geometry = useLoader(STLLoader, url);
   const mesh = useMemo(() => {
@@ -120,7 +122,7 @@ function PickingGun({
         }
       }}
     >
-      <meshStandardMaterial color="#6e7480" roughness={0.4} />
+      <meshStandardMaterial color={gunColor} roughness={0.4} />
     </mesh>
   );
 }
@@ -133,6 +135,7 @@ function MoldAssets({
   activeAccessoryId,
   onUpdateAccessory,
   onSetActiveAccessory,
+  globalParams,
 }: {
   assets: SceneAssets;
   step: Step;
@@ -141,6 +144,7 @@ function MoldAssets({
   activeAccessoryId: string | null;
   onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSetActiveAccessory: (id: string | null) => void;
+  globalParams: GlobalParams;
 }) {
   const [full, left, right, gun] = useLoader(STLLoader, [
     assets.fullUrl,
@@ -618,6 +622,7 @@ function LoadedScene(props: SceneProps) {
     activeAccessoryId,
     onUpdateAccessory,
     onSetActiveAccessory,
+    globalParams,
   } = props;
 
   // Collect all tagged points across published+enabled features for marker rendering.
@@ -654,6 +659,7 @@ function LoadedScene(props: SceneProps) {
             url={alignedGunUrl}
             activeTag={activeTag}
             onTagPoint={onTagPoint}
+            gunColor={globalParams.gunColor}
           />
           <FeatureOverlays featureStates={featureStates} />
         </>
