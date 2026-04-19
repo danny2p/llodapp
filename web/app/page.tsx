@@ -97,7 +97,7 @@ const DEFAULT_GLOBAL_PARAMS: GlobalParams = {
   mirror: false,
   rotateZDeg: 0,
   gunColor: "#6e7480",
-  moldColor: "#1e3a8a",
+  moldColor: "#00e6d6",
   totalLength: 160,
 };
 

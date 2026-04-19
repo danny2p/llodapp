@@ -224,10 +224,15 @@ def make_axis_gizmos(length_mm: float = 80.0, thickness_mm: float = 3.0) -> trim
     return trimesh.util.concatenate(boxes)
 
 
-def voxelize_filled(mesh: trimesh.Trimesh, pitch: float) -> tuple[np.ndarray, np.ndarray]:
-    # Open3D's C++ surface rasterizer + scipy fill. ~6x faster than trimesh's
-    # voxelize_subdivide Python face-bisection loop at fine pitches.
-    from scipy.ndimage import binary_fill_holes
+def voxelize_sdf(mesh: trimesh.Trimesh, pitch: float, band: int = 3
+                 ) -> tuple[np.ndarray, np.ndarray]:
+    """True mesh signed-distance field via Open3D RaycastingScene.
+
+    Returns a float32 grid (positive outside mesh, negative inside) and the
+    world-space origin of voxel [0,0,0]. Narrow band: exact mm-distance
+    within `band` voxels of the surface; ±band*pitch constants elsewhere.
+    Narrow band keeps the raycast 10-30x faster than full-grid evaluation."""
+    from scipy.ndimage import binary_fill_holes, distance_transform_edt
 
     tm = o3d.geometry.TriangleMesh(
         vertices=o3d.utility.Vector3dVector(mesh.vertices),
@@ -236,45 +241,57 @@ def voxelize_filled(mesh: trimesh.Trimesh, pitch: float) -> tuple[np.ndarray, np
     vg = o3d.geometry.VoxelGrid.create_from_triangle_mesh(tm, voxel_size=pitch)
     voxels = vg.get_voxels()
     if not voxels:
-        return np.zeros((1, 1, 1), dtype=bool), np.zeros(3)
+        return np.full((1, 1, 1), band * pitch, dtype=np.float32), np.zeros(3)
     idx = np.array([v.grid_index for v in voxels], dtype=np.int64)
     i_min = idx.min(axis=0)
     idx -= i_min
     shape = tuple((idx.max(axis=0) + 1).tolist())
     surface = np.zeros(shape, dtype=bool)
     surface[idx[:, 0], idx[:, 1], idx[:, 2]] = True
-    occupancy = binary_fill_holes(surface)
-    # Origin = world-space center of voxel [0,0,0].
+    occ = binary_fill_holes(surface)
     o3d_origin = np.asarray(vg.origin, dtype=float)
     origin = o3d_origin + (np.asarray(i_min, dtype=float) + 0.5) * pitch
-    return occupancy, origin
+
+    # Narrow band: voxels within `band` voxel-hops of the occupancy surface.
+    # distance_transform_edt(mask) returns 0 inside mask, distance-to-mask
+    # outside — so use each EDT only on its own side.
+    dist_in  = distance_transform_edt(occ)
+    dist_out = distance_transform_edt(~occ)
+    dist_to_surface = np.where(occ, dist_in, dist_out)
+    band_mask = dist_to_surface <= band
+    ijk = np.argwhere(band_mask)
+    coords = (origin[None, :] + ijk.astype(np.float64) * pitch).astype(np.float32)
+
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d.t.geometry.TriangleMesh.from_legacy(tm))
+    sdf_band = scene.compute_signed_distance(o3d.core.Tensor(coords)).numpy()
+
+    sdf_grid = np.where(occ, -band * pitch, band * pitch).astype(np.float32)
+    sdf_grid[ijk[:, 0], ijk[:, 1], ijk[:, 2]] = sdf_band.astype(np.float32)
+    return sdf_grid, origin
 
 
-def sweep_cavity(gun_vox: np.ndarray, insertion_depth_vox: int) -> np.ndarray:
-    gun_len = gun_vox.shape[0]
-    yz = gun_vox.shape[1:]
+def sweep_cavity_sdf(gun_sdf: np.ndarray, insertion_depth_vox: int) -> np.ndarray:
+    """SDF analog of the boolean sweep. Running min along +X matches the
+    running OR on occupancy: min(SDFs) approximates SDF of the union, and
+    is exact at the zero-crossing where MC actually samples. Negative =
+    inside the swept cavity."""
+    gun_len = gun_sdf.shape[0]
     limit = min(gun_len, insertion_depth_vox)
-    cum = np.zeros((limit,) + yz, dtype=bool)
-    running = np.zeros(yz, dtype=bool)
-    for i in range(limit):
-        running = running | gun_vox[i]
-        cum[i] = running
-    cavity = np.zeros((insertion_depth_vox,) + yz, dtype=bool)
-    for x in range(insertion_depth_vox):
-        idx = insertion_depth_vox - 1 - x
-        cavity[x] = cum[min(idx, limit - 1)]
-    return cavity
+    cum = np.minimum.accumulate(gun_sdf[:limit], axis=0)
+    idx = np.minimum(np.arange(insertion_depth_vox - 1, -1, -1), limit - 1)
+    return cum[idx].astype(np.float32)
 
 
-def cavity_to_mesh(cavity: np.ndarray, origin: np.ndarray, pitch: float,
+def cavity_to_mesh(cavity_sdf: np.ndarray, origin: np.ndarray, pitch: float,
                    smooth_sigma: float = 0.0) -> trimesh.Trimesh:
     from skimage import measure
-    from scipy.ndimage import gaussian_filter
-    padded = np.pad(cavity, 1, mode="constant", constant_values=0).astype(np.float32)
+    pad_val = float(np.abs(cavity_sdf).max())
+    padded = np.pad(cavity_sdf, 1, mode="constant", constant_values=pad_val).astype(np.float32)
     if smooth_sigma > 0:
+        from scipy.ndimage import gaussian_filter
         padded = gaussian_filter(padded, sigma=smooth_sigma)
-    verts, faces, _, _ = measure.marching_cubes(padded, level=0.5)
-    # Subtract 1.0 to account for padding
+    verts, faces, _, _ = measure.marching_cubes(padded, level=0.0)
     verts = (verts - 1.0) * pitch + origin
     m = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
     m.merge_vertices()
@@ -300,7 +317,8 @@ def _hash_file(path: Path) -> str:
 
 def _cache_key(input_path: Path, voxel_pitch: float, rotate_z_deg: float, mirror: bool, total_length: float) -> str:
     mir = "1" if mirror else "0"
-    return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}_l{total_length}"
+    # v2: cavity stored as float32 SDF instead of bool; invalidates v1 entries.
+    return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}_l{total_length}_sdfv2"
 
 
 def _load_prep_cache(cache_base: Path, key: str):
@@ -309,20 +327,20 @@ def _load_prep_cache(cache_base: Path, key: str):
         return None
     meta = json.loads((entry / "meta.json").read_text())
     data = np.load(entry / "grids.npz")
-    cavity = data["cavity"]
+    cavity_sdf = data["cavity_sdf"]
     origin = data["origin"]
     insertion_vox = int(meta["insertion_vox"])
     tg = meta.get("tg")
     if tg is not None:
         tg = {k: (np.asarray(v) if isinstance(v, list) else v) for k, v in tg.items()}
     aligned = trimesh.load_mesh(entry / "aligned.stl", process=True)
-    return aligned, cavity, origin, insertion_vox, tg
+    return aligned, cavity_sdf, origin, insertion_vox, tg
 
 
-def _save_prep_cache(cache_base: Path, key: str, aligned, cavity, origin, insertion_vox, tg) -> None:
+def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, insertion_vox, tg) -> None:
     entry = cache_base / key
     entry.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(entry / "grids.npz", cavity=cavity, origin=origin)
+    np.savez_compressed(entry / "grids.npz", cavity_sdf=cavity_sdf, origin=origin)
     tg_json = None
     if tg is not None:
         tg_json = {k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in tg.items()}
@@ -342,8 +360,10 @@ def main() -> None:
                         help="Additional rotation around Z after auto alignment (to correct MABR errors).")
     parser.add_argument("--mirror", action="store_true",
                         help="Mirror across XY plane (flip Z). Use if slide release/ejection side comes out wrong.")
-    parser.add_argument("--smooth-sigma", type=float, default=0.8,
-                        help="Gaussian sigma (voxels) for cavity-grid smoothing; 0 disables.")
+    parser.add_argument("--smooth-sigma", type=float, default=0.0,
+                        help="Gaussian sigma (voxels) for cavity-grid smoothing; 0 disables. "
+                             "Default 0: the true-SDF pipeline already produces sub-voxel surfaces, "
+                             "so blurring rounds good radii and is usually not wanted.")
     parser.add_argument("--smooth-iter", type=int, default=0,
                         help="Number of Taubin smoothing iterations on the final mesh. Helps with voxel stair-stepping.")
     parser.add_argument("--total-length", type=float, default=INSERTION_DEPTH_MM,
@@ -392,9 +412,9 @@ def main() -> None:
 
     if cached is not None:
         console.rule("Prep cache hit")
-        aligned, cavity, origin, insertion_vox, tg = cached
+        aligned, cavity_sdf, origin, insertion_vox, tg = cached
         console.print(f"key: {cache_key}  ({cache_base})")
-        console.print(f"aligned: {len(aligned.faces):,} faces; cavity: {cavity.shape}; tg: {'yes' if tg else 'no'}")
+        console.print(f"aligned: {len(aligned.faces):,} faces; cavity_sdf: {cavity_sdf.shape}; tg: {'yes' if tg else 'no'}")
     else:
         raw: trimesh.Trimesh = trimesh.load_mesh(input_path, process=True)
         raw.merge_vertices()
@@ -429,23 +449,26 @@ def main() -> None:
         console.print(f"after orientation normalization: bbox {aligned.bounds[1] - aligned.bounds[0]}")
 
         console.rule("Voxelize + sweep")
-        occupancy, origin = voxelize_filled(aligned, args.voxel_pitch)
+        gun_sdf, origin = voxelize_sdf(aligned, args.voxel_pitch)
 
         # Pad the voxel grid in all dimensions to provide headroom for
-        # offset relief channels and ensure clean mesh end-caps.
+        # offset relief channels and ensure clean mesh end-caps. Outside
+        # the mesh the SDF should stay positive — use the band constant.
         pad_mm = 15.0
         pad_vox = int(np.ceil(pad_mm / args.voxel_pitch))
-        occupancy = np.pad(occupancy, ((pad_vox, pad_vox), (pad_vox, pad_vox), (pad_vox, pad_vox)), mode="constant", constant_values=0)
+        outside_val = float(np.max(gun_sdf))
+        gun_sdf = np.pad(gun_sdf, ((pad_vox, pad_vox),) * 3, mode="constant", constant_values=outside_val)
         origin -= pad_vox * args.voxel_pitch
 
-        console.print(f"voxel grid: {occupancy.shape}, {int(occupancy.sum()):,} filled")
+        occupancy = gun_sdf < 0
+        console.print(f"voxel grid: {gun_sdf.shape}, {int(occupancy.sum()):,} inside")
         insertion_vox = int(round(args.total_length / args.voxel_pitch))
-        cavity = sweep_cavity(occupancy, insertion_vox)
+        cavity_sdf = sweep_cavity_sdf(gun_sdf, insertion_vox)
 
         tg = detect_trigger_guard(occupancy, origin, args.voxel_pitch, console)
 
         if not args.no_cache:
-            _save_prep_cache(cache_base, cache_key, aligned, cavity, origin, insertion_vox, tg)
+            _save_prep_cache(cache_base, cache_key, aligned, cavity_sdf, origin, insertion_vox, tg)
             console.print(f"cached prep under {cache_key}")
 
     aligned_out = out_dir / f"{stem}_mabr_aligned{suffix}.stl"
@@ -477,6 +500,15 @@ def main() -> None:
 
     # Iterate features in registry order (frontend barrel = JSON dict order).
     # Each enabled feature with at least one tagged point fires its applier.
+    # Features honor the existing binary-cavity plugin contract; we derive
+    # a binary view from the SDF, hand it to the features, then splice their
+    # output back into the SDF only at voxels they actually modified.
+    # Clobbering the whole SDF with a ±pitch binary field would clip the
+    # true mesh distance at pristine surfaces (e.g. the slide top), pulling
+    # MC zero-crossings off their sub-voxel positions and reintroducing
+    # stair-steps on angled surfaces.
+    original_cavity_bin = (cavity_sdf < 0).astype(np.float32)
+    cavity_bin = original_cavity_bin.copy()
     context = {"tg": tg}
     for fid, state in features_state.items():
         if not state.get("enabled"):
@@ -489,15 +521,26 @@ def main() -> None:
         if fn is None:
             continue  # marker-only feature (no apply.py)
         console.rule(f"Apply: {fid}")
-        cavity, cavity_origin = fn(
-            cavity, cavity_origin, args.voxel_pitch,
+        cavity_bin, cavity_origin = fn(
+            cavity_bin, cavity_origin, args.voxel_pitch,
             state=state,
             insertion_vox=insertion_vox,
             context=context,
             console=console,
         )
 
-    mesh = cavity_to_mesh(cavity, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma)
+    if cavity_bin.shape != cavity_sdf.shape:
+        console.print("[yellow]feature resized grid; using binary-derived SDF[/yellow]")
+        cavity_sdf_final = (args.voxel_pitch * (1.0 - 2.0 * np.clip(cavity_bin, 0.0, 1.0))).astype(np.float32)
+    else:
+        cavity_sdf_final = cavity_sdf.copy()
+        touched = cavity_bin != original_cavity_bin
+        if touched.any():
+            feature_sdf = (args.voxel_pitch * (1.0 - 2.0 * np.clip(cavity_bin, 0.0, 1.0))).astype(np.float32)
+            cavity_sdf_final[touched] = feature_sdf[touched]
+            console.print(f"features touched {int(touched.sum()):,} voxels")
+
+    mesh = cavity_to_mesh(cavity_sdf_final, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma)
     if args.smooth_iter > 0:
         console.rule(f"Taubin Smoothing ({args.smooth_iter} iterations)")
         mesh = smooth_mesh(mesh, iterations=args.smooth_iter)

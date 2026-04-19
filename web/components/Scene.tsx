@@ -351,7 +351,8 @@ function Plug({
       lastViewModeRef.current = viewMode;
     }
 
-    progressRef.current = Math.min(1, progressRef.current + delta / 1.5);
+    const duration = step === 2 ? 3.0 : 1.5;
+    progressRef.current = Math.min(1, progressRef.current + delta / duration);
     const t = easeOutCubic(progressRef.current);
 
     if (plugMeshRef.current) plugMeshRef.current.visible = step === 2;
@@ -364,13 +365,16 @@ function Plug({
     if (rightGroupRef.current) rightGroupRef.current.visible = showRight;
 
     if (step === 2) {
-      // Start from just outside the mold block (totalLength)
+      // Drive the gun in far enough that its muzzle tip reaches the
+      // mold's +X face (the mold has ~15mm of Python padding past the
+      // gun, so a docked-at-origin gun would leave the tip clipped).
+      const moldFrontX = plug.size.x / 2 + 0.5;
       const startX = -globalParams.totalLength * 1.1;
-      const endX = 0;
+      const endX = moldFrontX - plug.gunLeadingX;
       const gunX = THREE.MathUtils.lerp(startX, endX, t);
       if (gunRef.current) gunRef.current.position.x = gunX;
-      
-      // Calculate muzzle position relative to the block entrance
+
+      // Plane tracks the muzzle tip 1:1.
       const muzzleWorldX = gunX + plug.gunLeadingX;
       plugClipPlane.constant = muzzleWorldX;
 
