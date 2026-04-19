@@ -213,13 +213,20 @@ function MoldAssets({
     gunPrepared.computeBoundingBox();
     const gunLeadingX = gunPrepared.boundingBox!.max.x;
 
+    // Get the size and center of the final prepared mold for layout and splitting
+    fullPrepared.computeBoundingBox();
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    fullPrepared.boundingBox!.getSize(size);
+    fullPrepared.boundingBox!.getCenter(center);
+
     return {
       full: fullPrepared,
       left: leftPrepared,
       right: rightPrepared,
       gun: gunPrepared,
       size,
-      center: center.clone(),
+      center,
       gunLeadingX,
     };
   }, [full, left, right, gun]);
