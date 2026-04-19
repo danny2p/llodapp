@@ -15,7 +15,7 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     v = state.get("values", {})
     height_y = float(v.get("height", 10.0))
     width_z = float(v.get("width", 4.0))
-    ox = float(v.get("offsetX", -10.0))
+    ox = float(v.get("offsetX", -19.0))
     oy = float(v.get("offsetY", 50.0))
     rz_deg = float(v.get("rotateZ", 0.0))
     

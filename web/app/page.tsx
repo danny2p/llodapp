@@ -345,6 +345,9 @@ export default function Page() {
                 setProcessingProgress(msg.data.p);
               } else if (msg.type === "result") {
                 setAlignedGunUrl(API_BASE + msg.data.alignedUrl);
+                setUploadedFile(file);
+                setSelectedSampleName(sampleName);
+                setFileName(file?.name || sampleName || "sample");
                 setStep(1.5);
                 setActiveTag(findNextUntaggedPoint(featureStates, null));
               } else if (msg.type === "error") {
@@ -367,7 +370,10 @@ export default function Page() {
   );
 
   const generateMold = useCallback(async () => {
-    if (!uploadedFile && !selectedSampleName) return;
+    if (!uploadedFile && !selectedSampleName) {
+      console.warn("No file or sample selected for generation");
+      return;
+    }
     setError(null);
     setIsProcessing(true);
     setProcessingLogs([]);
@@ -418,7 +424,7 @@ export default function Page() {
               setAssets(absolutize(data));
               setGeneratedGlobalParams(globalParams);
               setGeneratedFeatureStates(featureStates);
-              setGeneratedFileName(uploadedFile.name);
+              setGeneratedFileName(uploadedFile?.name || selectedSampleName || "sample");
               // Allow 3 seconds for the 'plunge and reveal' animation to complete 
               // before transitioning to the split-half view.
               window.setTimeout(() => setStep(3), 3000);
@@ -438,7 +444,7 @@ export default function Page() {
     } finally {
       setIsProcessing(false);
     }
-  }, [uploadedFile, globalParams, featureStates, absolutize]);
+  }, [uploadedFile, selectedSampleName, globalParams, featureStates, absolutize]);
 
   const downloadHalf = async (side: "left" | "right") => {
     if (!jobId || !assets) return;

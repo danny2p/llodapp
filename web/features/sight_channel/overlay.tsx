@@ -7,7 +7,7 @@ import { type FeatureOverlayProps } from "@/lib/features";
 export default function SightChannelOverlay({ def, state, globalParams }: FeatureOverlayProps & { globalParams: any }) {
   const h = Number(state.values.height ?? 10);
   const w = Number(state.values.width ?? 4);
-  const ox = Number(state.values.offsetX ?? -10);
+  const ox = Number(state.values.offsetX ?? -19);
   const oy = Number(state.values.offsetY ?? 50);
   const rz = Number(state.values.rotateZ ?? 0);
   const totalLength = Number(globalParams?.totalLength ?? 160);
