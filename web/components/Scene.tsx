@@ -59,6 +59,7 @@ type SceneProps = {
   onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSetActiveAccessory: (id: string | null) => void;
   globalParams: GlobalParams;
+  progress: number;
 };
 
 // Feature overlays — iterate the registry and render each feature's own
@@ -310,6 +311,7 @@ function Plug({
     [plugClipPlane, globalParams.moldColor]
   );
   const scanPlaneRef = useRef<THREE.Mesh>(null);
+  const phaseRef = useRef(0);
   const gunMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
@@ -382,8 +384,9 @@ function Plug({
         scanPlaneRef.current.position.x = muzzleWorldX;
       }
 
-      // Fast pulse for active indication
-      const pulse = (Math.sin(clock.getElapsedTime() * 10) + 1) / 2;
+      // Fast pulse for active indication (phase-based for smoothness)
+      phaseRef.current += delta * 10;
+      const pulse = (Math.sin(phaseRef.current) + 1) / 2;
       plugMaterial.emissiveIntensity = 0.1 + pulse * 0.5;
 
       const fadeStart = 0.75;
@@ -485,6 +488,7 @@ function ClayBlock({
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const lightRef = useRef<THREE.PointLight>(null);
+  const phaseRef = useRef(0);
 
   useFrame(({ clock }, delta) => {
     if (!ref.current) return;
@@ -495,7 +499,8 @@ function ClayBlock({
 
     if (visible) {
       // Pulsing emissive effect
-      const pulse = (Math.sin(clock.getElapsedTime() * 4) + 1) / 2;
+      phaseRef.current += delta * 4;
+      const pulse = (Math.sin(phaseRef.current) + 1) / 2;
       mat.emissiveIntensity = 0.2 + pulse * 0.4;
       if (lightRef.current) {
         lightRef.current.intensity = 0.5 + pulse * 1.5;
@@ -613,6 +618,118 @@ function CameraController({ isFlat }: { isFlat: boolean }) {
   return null;
 }
 
+function ProcessingSimulation({
+  gunUrl,
+  globalParams,
+  realtimeProgress,
+}: {
+  gunUrl: string;
+  globalParams: GlobalParams;
+  realtimeProgress: number;
+}) {
+  const gun = useLoader(STLLoader, gunUrl);
+  const [gunSize, setGunSize] = useState<THREE.Vector3>(
+    new THREE.Vector3(160, 40, 30)
+  );
+  const gunRef = useRef<THREE.Mesh>(null);
+  const scanPlaneRef = useRef<THREE.Mesh>(null);
+
+  const plugClipPlane = useMemo(
+    () => new THREE.Plane(new THREE.Vector3(-1, 0, 0), 1e6),
+    []
+  );
+
+  // Clone and center the geometry once to ensure stable positioning
+  const centeredGun = useMemo(() => {
+    const g = gun.clone();
+    g.center();
+    g.computeBoundingBox();
+    const s = new THREE.Vector3();
+    g.boundingBox?.getSize(s);
+    setGunSize(s);
+    return g;
+  }, [gun]);
+
+  // The block must contain the gun AND respect the user's defined length
+  const effectiveBlockWidth = Math.max(globalParams.totalLength, gunSize.x);
+
+  const phaseRef = useRef(0);
+  const pulsePhaseRef = useRef(0);
+
+  useFrame(({ clock }, delta) => {
+    if (!gunRef.current) return;
+    
+    // Accumulate phases based on delta time and current speed
+    // This prevents jumps when realtimeProgress (and thus speed) changes.
+    const speed = 0.6 + realtimeProgress * 1.5;
+    phaseRef.current += delta * speed;
+    
+    const pulseSpeed = 6 + realtimeProgress * 12;
+    pulsePhaseRef.current += delta * pulseSpeed;
+
+    const t = (Math.sin(phaseRef.current) + 1) / 2;
+    const halfW = effectiveBlockWidth / 2;
+    const scanX = THREE.MathUtils.lerp(-halfW, halfW, t);
+
+    // Position gun so its grip end is flush with the block entrance (-X)
+    gunRef.current.position.x = (gunSize.x - effectiveBlockWidth) / 2;
+    
+    // Clip plane remains open
+    plugClipPlane.constant = 1e6;
+
+    if (scanPlaneRef.current) {
+      scanPlaneRef.current.position.x = scanX;
+      const fade = Math.sin(t * Math.PI);
+      (scanPlaneRef.current.material as THREE.MeshBasicMaterial).opacity = 0.2 + fade * 0.5;
+      
+      // Change laser color from teal to success-green as we finish
+      (scanPlaneRef.current.material as THREE.MeshBasicMaterial).color.setHSL(
+        (170 - realtimeProgress * 50) / 360, 
+        0.7, 
+        0.6
+      );
+    }
+
+    // Active pulsing effect (also speeds up)
+    const mat = gunRef.current.material as THREE.MeshStandardMaterial;
+    const pulse = (Math.sin(pulsePhaseRef.current) + 1) / 2;
+    mat.emissiveIntensity = 0.2 + pulse * 0.6;
+  });
+
+  return (
+    <group>
+      <ClayBlock
+        visible={true}
+        sizeHint={gunSize}
+        totalLength={effectiveBlockWidth}
+      />
+
+      <mesh ref={gunRef} geometry={centeredGun} rotation={[0, Math.PI, 0]}>
+        <meshStandardMaterial
+          color={globalParams.gunColor}
+          metalness={0.6}
+          roughness={0.3}
+          emissive={globalParams.gunColor}
+          emissiveIntensity={0.2}
+          clippingPlanes={[plugClipPlane]}
+        />
+      </mesh>
+
+      {/* Laser Scanning Plane */}
+      <mesh ref={scanPlaneRef} rotation={[0, Math.PI / 2, 0]}>
+        <planeGeometry args={[gunSize.z * 2.5, gunSize.y * 1.5]} />
+        <meshBasicMaterial
+          color="#5EEAD4"
+          transparent
+          opacity={0.6}
+          side={THREE.DoubleSide}
+          blending={THREE.AdditiveBlending}
+        />
+      </mesh>
+    </group>
+  );
+}
+
 function LoadedScene(props: SceneProps) {
   const {
     step,
@@ -627,6 +744,7 @@ function LoadedScene(props: SceneProps) {
     onUpdateAccessory,
     onSetActiveAccessory,
     globalParams,
+    progress,
   } = props;
 
   // Collect all tagged points across published+enabled features for marker rendering.
@@ -667,6 +785,14 @@ function LoadedScene(props: SceneProps) {
           />
           <FeatureOverlays featureStates={featureStates} />
         </>
+      )}
+
+      {step === 2 && !assets && alignedGunUrl && (
+        <ProcessingSimulation
+          gunUrl={alignedGunUrl}
+          globalParams={globalParams}
+          realtimeProgress={progress}
+        />
       )}
 
       {step === 1.5 &&

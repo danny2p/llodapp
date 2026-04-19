@@ -400,6 +400,12 @@ def main() -> None:
     appliers = load_appliers()
 
     console = Console()
+    def emit_progress(p: float, label: str):
+        # Print a simple JSON line that api.py can intercept
+        # Use flush=True to ensure it's sent immediately through the pipe
+        print(f"__PROGRESS__:{json.dumps({'p': p, 'l': label})}", flush=True)
+
+    emit_progress(0.01, "initializing pipeline")
     console.print(f"input: {input_path.relative_to(PROJECT_DIR)}")
 
     suffix = f"_rz{int(args.rotate_z_deg)}" if args.rotate_z_deg else ""
@@ -411,6 +417,7 @@ def main() -> None:
     cached = None if args.no_cache else _load_prep_cache(cache_base, cache_key)
 
     if cached is not None:
+        emit_progress(0.60, "prep cache hit :: loading grids")
         console.rule("Prep cache hit")
         aligned, cavity_sdf, origin, insertion_vox, tg = cached
         console.print(f"key: {cache_key}  ({cache_base})")
@@ -421,11 +428,13 @@ def main() -> None:
         console.rule("Load")
         console.print(f"raw: {len(raw.faces):,} faces, bbox {raw.bounds[1] - raw.bounds[0]}")
 
+        emit_progress(0.15, "detecting slide alignment")
         console.rule("Detect slide sides (Z axis)")
         small = decimate(raw, DECIMATE_FOR_RANSAC)
         z_axis = find_slide_normal(small, console)
         console.print(f"Z (thickness) = {z_axis.round(3)}")
 
+        emit_progress(0.25, "calculating MABR rotation")
         console.rule("MABR in-plane rotation (X axis)")
         R, centroid = build_rotation(raw, z_axis, console)
         aligned = apply_rotation(raw, R, centroid)
@@ -448,6 +457,7 @@ def main() -> None:
         aligned = normalize_y_orientation(aligned, console)
         console.print(f"after orientation normalization: bbox {aligned.bounds[1] - aligned.bounds[0]}")
 
+        emit_progress(0.35, "voxelizing mesh to SDF")
         console.rule("Voxelize + sweep")
         gun_sdf, origin = voxelize_sdf(aligned, args.voxel_pitch)
 
@@ -462,9 +472,12 @@ def main() -> None:
 
         occupancy = gun_sdf < 0
         console.print(f"voxel grid: {gun_sdf.shape}, {int(occupancy.sum()):,} inside")
+        
+        emit_progress(0.50, "computing swept cavity volume")
         insertion_vox = int(round(args.total_length / args.voxel_pitch))
         cavity_sdf = sweep_cavity_sdf(gun_sdf, insertion_vox)
 
+        emit_progress(0.55, "detecting trigger guard anchors")
         tg = detect_trigger_guard(occupancy, origin, args.voxel_pitch, console)
 
         if not args.no_cache:
@@ -510,13 +523,18 @@ def main() -> None:
     original_cavity_bin = (cavity_sdf < 0).astype(np.float32)
     cavity_bin = original_cavity_bin.copy()
     context = {"tg": tg}
-    for fid, state in features_state.items():
-        if not state.get("enabled"):
-            continue
+    
+    enabled_fids = [fid for fid, state in features_state.items() if state.get("enabled")]
+    
+    for idx, fid in enumerate(enabled_fids):
+        state = features_state[fid]
         pts = state.get("points") or []
         if not pts or pts[0] is None:
             console.print(f"[yellow]{fid}: enabled but not tagged; skipping[/yellow]")
             continue
+            
+        emit_progress(0.65 + (idx / len(enabled_fids)) * 0.15, f"applying feature :: {fid}")
+        
         fn = appliers.get(fid)
         if fn is None:
             continue  # marker-only feature (no apply.py)
@@ -540,6 +558,7 @@ def main() -> None:
             cavity_sdf_final[touched] = feature_sdf[touched]
             console.print(f"features touched {int(touched.sum()):,} voxels")
 
+    emit_progress(0.85, "extracting high-res mesh via marching cubes")
     mesh = cavity_to_mesh(cavity_sdf_final, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma)
     if args.smooth_iter > 0:
         console.rule(f"Taubin Smoothing ({args.smooth_iter} iterations)")
@@ -555,7 +574,8 @@ def main() -> None:
     else:
         targets = (args.decim_target,)
 
-    for target in targets:
+    for idx, target in enumerate(targets):
+        emit_progress(0.90 + (idx / len(targets)) * 0.08, f"decimating to {target} faces")
         out = out_dir / f"{stem}_swept_mabr_{int(args.total_length)}mm_decim{target}{suffix}.stl"
         if target < len(mesh.faces):
             dec = decimate(mesh, target)
@@ -563,6 +583,8 @@ def main() -> None:
         else:
             mesh.export(out)
         console.print(f"wrote {out.name} (target {target})")
+
+    emit_progress(1.0, "processing complete")
 
 
 if __name__ == "__main__":

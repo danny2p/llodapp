@@ -564,8 +564,9 @@ export default function Page() {
               downloadHalf={downloadHalf}
               stem={stem}
               reset={reset}
-            />
-
+              processingLogs={processingLogs}
+              processingProgress={processingProgress}
+              />
             <Panel title="Processing Parameters" id="§ PROC.PARAMS">
               <ParamPanel
                 globalParams={globalParams}
@@ -848,6 +849,8 @@ function StepContext(props: {
   downloadHalf: (side: "left" | "right") => void;
   stem: string;
   reset: () => void;
+  processingLogs: string[];
+  processingProgress: number;
 }) {
   const {
     step,
@@ -874,6 +877,8 @@ function StepContext(props: {
     downloadHalf,
     stem,
     reset,
+    processingLogs,
+    processingProgress,
   } = props;
 
   const meta = STEP_META[step];

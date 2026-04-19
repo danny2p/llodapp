@@ -60,6 +60,10 @@ def _run(cmd: list[str]) -> None:
 
 async def _run_stream(cmd: list[str]):
     """Run a command and yield progress markers + final status."""
+    # Add -u to python command to disable output buffering
+    if cmd[0].endswith("python") or cmd[0].endswith("python3"):
+        cmd.insert(1, "-u")
+
     process = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
@@ -69,14 +73,22 @@ async def _run_stream(cmd: list[str]):
         universal_newlines=True,
     )
 
+    # We'll use a set to track emitted progress to avoid duplicates if 
+    # the script emits multiple identical markers.
+    last_p = -1.0
+
     if process.stdout:
         for line in iter(process.stdout.readline, ""):
             if line.startswith("__PROGRESS__:"):
                 try:
                     data = json.loads(line.split("__PROGRESS__:", 1)[1])
-                    yield {"type": "progress", "data": data}
+                    if data['p'] != last_p:
+                        yield {"type": "progress", "data": data}
+                        last_p = data['p']
                 except:
                     pass
+            # Optional: Log other output to stderr for debugging
+            # else: print(f"SUBPROCESS: {line.strip()}")
 
     return_code = process.wait()
     if return_code != 0:
@@ -292,7 +304,6 @@ async def process_stream(
 
 @app.post("/api/process")
 async def process(
-...
     file: UploadFile,
     voxel_pitch: float = Form(0.25),
     smooth_sigma: float = Form(0.8),
