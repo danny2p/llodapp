@@ -3,11 +3,19 @@
 }
 
 yourdomain.com {
-    # Forward all /api and /jobs requests to the backend
-    reverse_proxy /api/* backend:8000
-    reverse_proxy /jobs/* backend:8000
-    reverse_proxy /accessories/* backend:8000
+    # Match any path starting with /api, /jobs, or /accessories
+    handle /api* {
+        reverse_proxy backend:8000
+    }
+    handle /jobs* {
+        reverse_proxy backend:8000
+    }
+    handle /accessories* {
+        reverse_proxy backend:8000
+    }
 
-    # Forward everything else to the frontend
-    reverse_proxy frontend:3000
+    # Fallback to frontend for everything else
+    handle {
+        reverse_proxy frontend:3000
+    }
 }
