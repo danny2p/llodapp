@@ -4,10 +4,9 @@ FROM python:3.12-slim
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install system dependencies for rtree, open3d, and mesh processing
-# Added --fix-missing to handle transient network issues
 RUN apt-get update --fix-missing && apt-get install -y \
     libspatialindex-dev \
-    libgl1-mesa-glx \
+    libgl1 \
     libgomp1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
