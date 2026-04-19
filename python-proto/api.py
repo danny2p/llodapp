@@ -108,6 +108,55 @@ def list_accessories() -> list[str]:
     return [p.name for p in sorted(ACCESSORIES_DIR.glob("*.stl"))]
 
 
+@app.post("/api/align-stream")
+async def align_stream(
+    file: UploadFile,
+    rotate_z_deg: float = Form(0.0),
+    mirror: bool = Form(False),
+):
+    if not file.filename or not file.filename.lower().endswith(".stl"):
+        raise HTTPException(status_code=400, detail="upload must be a .stl file")
+
+    job_id = uuid.uuid4().hex[:12]
+    job_dir = JOBS_DIR / job_id
+    job_dir.mkdir()
+
+    stem = Path(file.filename).stem
+    safe_stem = "".join(c if c.isalnum() or c in "-_" else "_" for c in stem) or "upload"
+    input_path = job_dir / f"{safe_stem}.stl"
+    with input_path.open("wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    async def event_generator():
+        yield json.dumps({"type": "progress", "data": {"p": 0.0, "l": "initializing alignment"}}) + "\n"
+
+        cmd: list[str] = [
+            sys.executable, str(HERE / "prototype_v11_mabr.py"),
+            "--input", str(input_path),
+            "--out-dir", str(job_dir),
+            "--gun-decim-target", "30000",
+            "--rotate-z-deg", str(rotate_z_deg),
+        ]
+        if mirror:
+            cmd.append("--mirror")
+
+        async for msg in _run_stream(cmd):
+            if msg["type"] == "error":
+                yield json.dumps(msg) + "\n"
+                return
+            yield json.dumps(msg) + "\n"
+
+        gun_path = _one(job_dir, f"*_mabr_aligned_decim30000*.stl")
+        
+        result = {
+            "jobId": job_id,
+            "alignedUrl": f"/jobs/{job_id}/{gun_path.name}",
+        }
+        yield json.dumps({"type": "result", "data": result}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
 @app.post("/api/align")
 async def align(
     file: UploadFile,

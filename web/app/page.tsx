@@ -187,6 +187,8 @@ export default function Page() {
   const [generatedFileName, setGeneratedFileName] = useState<string | null>(
     null
   );
+  const [processingLogs, setProcessingLogs] = useState<string[]>([]);
+  const [processingProgress, setProcessingProgress] = useState(0);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/accessories`)
@@ -297,6 +299,8 @@ export default function Page() {
       setError(null);
       setIsProcessing(true);
       setAssets(null);
+      setProcessingLogs([]);
+      setProcessingProgress(0);
       setStep(1);
       try {
         const form = new FormData();
@@ -304,17 +308,46 @@ export default function Page() {
         for (const [k, v] of Object.entries(withGlobals)) {
           form.append(CAMEL_TO_SNAKE(k), String(v));
         }
-        const res = await fetch(`${API_BASE}/api/align`, {
+        const res = await fetch(`${API_BASE}/api/align-stream`, {
           method: "POST",
           body: form,
         });
         if (!res.ok) throw new Error(await readErr(res));
+        if (!res.body) throw new Error("ReadableStream not supported");
 
-        const data = await res.json();
-        setAlignedGunUrl(API_BASE + data.alignedUrl);
-        setStep(1.5);
-        // Activate the first un-tagged point on the first enabled+published feature.
-        setActiveTag(findNextUntaggedPoint(featureStates, null));
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() || "";
+
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+              const msg = JSON.parse(line);
+              if (msg.type === "progress") {
+                setProcessingLogs((prev) => [...prev, msg.data.l]);
+                setProcessingProgress(msg.data.p);
+              } else if (msg.type === "result") {
+                setAlignedGunUrl(API_BASE + msg.data.alignedUrl);
+                setStep(1.5);
+                setActiveTag(findNextUntaggedPoint(featureStates, null));
+              } else if (msg.type === "error") {
+                throw new Error(
+                  msg.detail.stderr || `Error ${msg.detail.code} in alignment`
+                );
+              }
+            } catch (e) {
+              console.error("Failed to parse progress line:", line, e);
+            }
+          }
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -328,6 +361,8 @@ export default function Page() {
     if (!uploadedFile) return;
     setError(null);
     setIsProcessing(true);
+    setProcessingLogs([]);
+    setProcessingProgress(0);
     setStep(2);
     try {
       const form = new FormData();
@@ -338,26 +373,57 @@ export default function Page() {
       form.append("total_length", String(globalParams.totalLength));
       form.append("features_state", JSON.stringify(featureStates));
 
-      const res = await fetch(`${API_BASE}/api/process`, {
+      const res = await fetch(`${API_BASE}/api/process-stream`, {
         method: "POST",
         body: form,
       });
       if (!res.ok) throw new Error(await readErr(res));
+      if (!res.body) throw new Error("ReadableStream not supported");
 
-      const data = (await res.json()) as ProcessResponse;
-      setJobId(data.jobId);
-      setAssets(absolutize(data));
-      setGeneratedGlobalParams(globalParams);
-      setGeneratedFeatureStates(featureStates);
-      setGeneratedFileName(uploadedFile.name);
-      window.setTimeout(() => setStep(3), 3000);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.type === "progress") {
+              setProcessingLogs((prev) => [...prev, msg.data.l]);
+              setProcessingProgress(msg.data.p);
+            } else if (msg.type === "result") {
+              const data = msg.data as ProcessResponse;
+              setJobId(data.jobId);
+              setAssets(absolutize(data));
+              setGeneratedGlobalParams(globalParams);
+              setGeneratedFeatureStates(featureStates);
+              setGeneratedFileName(uploadedFile.name);
+              window.setTimeout(() => setStep(3), 1000);
+            } else if (msg.type === "error") {
+              throw new Error(
+                msg.detail.stderr || `Error ${msg.detail.code} in pipeline`
+              );
+            }
+          } catch (e) {
+            console.error("Failed to parse progress line:", line, e);
+          }
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setStep(1.5);
     } finally {
       setIsProcessing(false);
     }
-  }, [uploadedFile, globalParams, featureStates]);
+  }, [uploadedFile, globalParams, featureStates, absolutize]);
 
   const downloadHalf = async (side: "left" | "right") => {
     if (!jobId || !assets) return;
@@ -548,6 +614,7 @@ export default function Page() {
             onUpdateAccessory={updateAccessory}
             onSetActiveAccessory={setActiveAccessoryId}
             globalParams={globalParams}
+            progress={processingProgress}
           />
 
           <ViewportHUD
@@ -836,7 +903,12 @@ function StepContext(props: {
       )}
 
       {step === 1 && isProcessing && (
-        <ProcessingIndicator label="Aligning 3D Scan" fileName={fileName} />
+        <ProcessingStatus
+          fileName={fileName}
+          logs={processingLogs}
+          progress={processingProgress}
+          label="Alignment Active"
+        />
       )}
 
       {step === 1.5 && (
@@ -850,7 +922,13 @@ function StepContext(props: {
         />
       )}
 
-      {step === 2 && <ProcessingStatus fileName={fileName} />}
+      {step === 2 && (
+        <ProcessingStatus
+          fileName={fileName}
+          logs={processingLogs}
+          progress={processingProgress}
+        />
+      )}
 
       {step === 3 && assets && (
         <ExportPanel
@@ -1155,67 +1233,57 @@ function FeatureTagCard({
 // STEP 2 — PROCESSING STATUS
 // ────────────────────────────────────────────────────────────────────
 
-function ProcessingStatus({ fileName }: { fileName: string | null }) {
-  const lines = useMemo(
-    () => [
-      `3d scan ingested :: ${fileName ?? "unknown.stl"}`,
-      "voxelizing @ 0.25mm pitch...",
-      "ransac slide detection :: locked",
-      "mabr rotation :: aligned",
-      "sweeping occupancy along +X axis...",
-      "marching cubes :: exporting iso-surface",
-      "taubin smoothing :: 10 iterations",
-      "decimating to target face count...",
-      "retention SDF :: carving indent",
-      "slide release clearance :: channeling",
-      "split plane :: z=0 earcut cap",
-      "creating geometry...",
-    ],
-    [fileName]
-  );
+function ProcessingStatus({
+  fileName,
+  logs,
+  progress,
+  label = "Processing Active",
+}: {
+  fileName: string | null;
+  logs: string[];
+  progress: number;
+  label?: string;
+}) {
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3 p-3 border border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)]">
         <ScanReticle size={32} />
-        <div className="flex flex-col">
-          <span className="font-display text-[11px] uppercase tracking-widest text-[var(--hud-amber-bright)] hud-glow-amber">
-            Processing Active
-          </span>
-          <span className="font-mono text-[10px] text-[var(--hud-text-dim)]">
+        <div className="flex flex-col flex-1">
+          <div className="flex items-center justify-between">
+            <span className="font-display text-[11px] uppercase tracking-widest text-[var(--hud-amber-bright)] hud-glow-amber">
+              {label}
+            </span>
+            <span className="font-mono text-[10px] text-[var(--hud-amber)] tabular-nums">
+              {Math.round(progress * 100)}%
+            </span>
+          </div>
+          <div className="h-1 bg-[var(--hud-line)] mt-2 relative overflow-hidden">
+            <div
+              className="absolute inset-y-0 left-0 bg-[var(--hud-amber)] transition-all duration-500 ease-out"
+              style={{ width: `${progress * 100}%` }}
+            />
+            <div
+              className="absolute inset-y-0 left-0 bg-[var(--hud-amber-bright)] hud-glow-amber animate-pulse"
+              style={{ width: `${progress * 100}%` }}
+            />
+          </div>
+          <span className="font-mono text-[9px] text-[var(--hud-text-faint)] mt-1.5 uppercase tracking-wider">
             Do not leave or refresh page.
           </span>
         </div>
       </div>
-      <div className="max-h-[220px] overflow-y-auto hud-scroll p-2 border border-[var(--hud-line)] bg-[var(--hud-void)]/60">
-        <TypingLines lines={lines} speed={280} />
+      <div className="max-h-[220px] overflow-y-auto hud-scroll p-2 border border-[var(--hud-line)] bg-[var(--hud-void)]/60 flex flex-col gap-0.5">
+        {logs.map((line, i) => (
+          <TerminalLine key={i} tone="accent">
+            {line}
+          </TerminalLine>
+        ))}
+        <div className="animate-pulse h-3 w-1.5 bg-[var(--hud-teal-bright)] ml-1 mt-1" />
       </div>
     </div>
   );
 }
 
-function ProcessingIndicator({
-  label,
-  fileName,
-}: {
-  label: string;
-  fileName: string | null;
-}) {
-  return (
-    <div className="flex items-center gap-3 p-3 border border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)]">
-      <ScanReticle size={30} />
-      <div className="flex flex-col">
-        <span className="font-display text-[11px] uppercase tracking-widest text-[var(--hud-teal-bright)]">
-          {label}
-        </span>
-        {fileName && (
-          <span className="font-mono text-[10px] text-[var(--hud-text-dim)] truncate max-w-[240px]">
-            {fileName}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 // ────────────────────────────────────────────────────────────────────
 // STEP 3 — EXPORT PANEL
