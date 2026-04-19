@@ -73,14 +73,15 @@ export function Group({
   collapsible = true,
   defaultOpen = false,
   tone = "default",
-}: {
+  }: {
   title: string;
   code?: string;
   children: React.ReactNode;
   collapsible?: boolean;
   defaultOpen?: boolean;
   tone?: "default" | "accent" | "warn";
-}) {
+  }) {
+
   const [open, setOpen] = useState(defaultOpen);
   const barColor =
     tone === "accent"

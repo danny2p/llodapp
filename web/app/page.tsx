@@ -1020,145 +1020,129 @@ function FeatureTagCard({
     <div
       className={`border transition-all ${
         !state.enabled
-          ? "border-[var(--hud-text-ghost)] bg-transparent opacity-70"
+          ? "border-[var(--hud-line)] bg-transparent opacity-40 grayscale"
           : complete
           ? "border-[var(--hud-line)] bg-[var(--hud-panel-2)]"
           : "border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)]"
       }`}
     >
-      {/* Header row: enable toggle + label + progress */}
-      <div className="flex items-center gap-2 px-2.5 py-2 border-b border-[var(--hud-line)]">
+      {/* Integrated header: label + progress + power toggle */}
+      <div className="flex items-center justify-between pl-3 pr-1 py-1.5 border-b border-[var(--hud-line)]">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <div className="relative w-2.5 h-2.5 shrink-0">
+            <div
+              className="absolute inset-0 opacity-30"
+              style={{ background: def.color, filter: "blur(3px)" }}
+            />
+            <div
+              className="relative w-2.5 h-2.5"
+              style={{
+                background: state.enabled ? def.color : "transparent",
+                border: `1px solid ${def.color}`,
+                boxShadow: state.enabled ? `0 0 5px ${def.color}` : "none",
+              }}
+            />
+          </div>
+          <span
+            className={`font-display text-[11px] uppercase tracking-[0.14em] truncate ${
+              state.enabled
+                ? "text-[var(--hud-text)]"
+                : "text-[var(--hud-text-ghost)]"
+            }`}
+          >
+            {def.label}
+          </span>
+          {state.enabled && (
+            <span className="font-mono text-[9px] text-[var(--hud-text-faint)] tabular-nums">
+              {tagged}/{required}
+            </span>
+          )}
+        </div>
+
         <button
           onClick={() => {
             const next = !state.enabled;
             updateFeatureEnabled(def.id, next);
             if (!next && activeTag?.featureId === def.id) setActiveTag(null);
           }}
-          className={`group/pw shrink-0 w-6 h-6 border flex items-center justify-center transition-colors ${
+          className={`shrink-0 w-7 h-7 flex items-center justify-center transition-all ${
             state.enabled
-              ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.12)] text-[var(--hud-teal-bright)] shadow-[0_0_6px_rgba(45,212,191,0.35)]"
-              : "border-[var(--hud-text-ghost)] text-[var(--hud-text-faint)] hover:border-[var(--hud-line-strong)]"
+              ? "text-[var(--hud-teal-bright)] opacity-100"
+              : "text-[var(--hud-text-faint)] opacity-50 hover:text-[var(--hud-text-dim)]"
           }`}
           title={state.enabled ? "Disable feature" : "Enable feature"}
           aria-pressed={state.enabled}
         >
-          <Power size={11} />
+          <Power size={12} strokeWidth={state.enabled ? 3 : 2} />
         </button>
-        <div className="relative w-3 h-3 shrink-0">
-          <div
-            className="absolute inset-0 opacity-30"
-            style={{ background: def.color, filter: "blur(4px)" }}
-          />
-          <div
-            className="relative w-3 h-3"
-            style={{
-              background: state.enabled ? def.color : "transparent",
-              border: `1px solid ${def.color}`,
-              boxShadow: state.enabled ? `0 0 5px ${def.color}` : "none",
-            }}
-          />
-        </div>
-        <span
-          className={`font-display text-[11px] uppercase tracking-wider flex-1 truncate ${
-            state.enabled
-              ? "text-[var(--hud-text)]"
-              : "text-[var(--hud-text-faint)]"
-          }`}
-        >
-          {def.label}
-        </span>
-        {state.enabled && (
-          <span className="font-mono text-[9px] text-[var(--hud-text-dim)] tabular-nums">
-            {tagged}/{required}
-          </span>
-        )}
       </div>
 
-      {/* Point chips — only when enabled */}
-      {state.enabled && (
-        <div className="flex flex-col gap-1 p-2">
-          {def.points.map((slot, i) => {
-            const active =
-              activeTag?.featureId === def.id && activeTag.pointIndex === i;
-            const coord = state.points[i];
-            return (
-              <div
-                key={slot.id}
-                role="button"
-                tabIndex={0}
-                onClick={() => setActiveTag({ featureId: def.id, pointIndex: i })}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    setActiveTag({ featureId: def.id, pointIndex: i });
-                  }
-                }}
-                className={`group/p relative text-left px-2 py-1.5 border transition-all cursor-pointer ${
-                  active
-                    ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.08)]"
-                    : coord
-                    ? "border-[var(--hud-line)] hover:border-[var(--hud-teal)]"
-                    : "border-[var(--hud-text-ghost)] hover:border-[var(--hud-line-strong)]"
-                }`}
-              >
-                <div className="flex items-center gap-2">
-                  <div className="relative flex items-center justify-center w-4 h-4 shrink-0">
-                    <div
-                      className="relative w-2 h-2"
-                      style={{
-                        background: coord ? def.color : "transparent",
-                        border: `1px solid ${def.color}`,
-                        boxShadow: coord ? `0 0 5px ${def.color}` : "none",
-                      }}
-                    />
+      {/* Point chips — always visible but disabled if state is off */}
+      <div className={`flex flex-col gap-1 p-2 ${!state.enabled ? "pointer-events-none" : ""}`}>
+        {def.points.map((slot, i) => {
+          const active =
+            activeTag?.featureId === def.id && activeTag.pointIndex === i;
+          const coord = state.points[i];
+          return (
+            <div
+              key={slot.id}
+              role="button"
+              tabIndex={state.enabled ? 0 : -1}
+              onClick={() => setActiveTag({ featureId: def.id, pointIndex: i })}
+              className={`group/p relative text-left px-2 py-1.5 border transition-all cursor-pointer ${
+                active
+                  ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.08)]"
+                  : coord
+                  ? "border-[var(--hud-line)]"
+                  : "border-[var(--hud-line-strong)]/40"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <div className="flex flex-col min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2">
+                    <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
+                      P.{String(i + 1).padStart(2, "0")}
+                    </span>
+                    <span className="font-display text-[10.5px] uppercase tracking-wider text-[var(--hud-text)] truncate">
+                      {slot.label}
+                    </span>
                   </div>
-                  <div className="flex flex-col min-w-0 flex-1">
-                    <div className="flex items-baseline gap-2">
-                      <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
-                        P.{String(i + 1).padStart(2, "0")}
-                      </span>
-                      <span className="font-display text-[10.5px] uppercase tracking-wider text-[var(--hud-text)] truncate">
-                        {slot.label}
-                      </span>
-                    </div>
-                    {coord ? (
-                      <span className="font-mono text-[9px] text-[var(--hud-text-dim)] tabular-nums mt-0.5">
-                        X {coord[0].toFixed(1)}
-                        <span className="text-[var(--hud-text-ghost)]"> · </span>
-                        Y {coord[1].toFixed(1)}
-                        <span className="text-[var(--hud-text-ghost)]"> · </span>
-                        Z {coord[2].toFixed(1)}
-                      </span>
-                    ) : (
-                      <span className="font-mono text-[9px] text-[var(--hud-text-faint)] italic mt-0.5">
-                        {active ? "AWAITING CLICK ON MODEL" : "UNSET"}
-                      </span>
-                    )}
-                  </div>
-                  {active && (
-                    <Crosshair
-                      size={12}
-                      className="text-[var(--hud-teal-bright)] animate-hud-blink shrink-0"
-                    />
-                  )}
-                  {coord && !active && (
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        clearFeaturePoint(def.id, i);
-                      }}
-                      className="shrink-0 text-[var(--hud-text-faint)] hover:text-[var(--hud-red)] p-0.5"
-                      title="Clear this point"
-                    >
-                      <X size={10} />
-                    </button>
+                  {coord ? (
+                    <span className="font-mono text-[9px] text-[var(--hud-text-dim)] tabular-nums mt-0.5">
+                      X {coord[0].toFixed(1)}
+                      <span className="text-[var(--hud-text-ghost)]"> · </span>
+                      Y {coord[1].toFixed(1)}
+                      <span className="text-[var(--hud-text-ghost)]"> · </span>
+                      Z {coord[2].toFixed(1)}
+                    </span>
+                  ) : (
+                    <span className="font-mono text-[9px] text-[var(--hud-text-faint)] italic mt-0.5">
+                      {active ? "AWAITING CLICK ON MODEL" : "UNSET"}
+                    </span>
                   )}
                 </div>
+                {active && (
+                  <Crosshair
+                    size={12}
+                    className="text-[var(--hud-teal-bright)] animate-hud-blink shrink-0"
+                  />
+                )}
+                {coord && state.enabled && !active && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      clearFeaturePoint(def.id, i);
+                    }}
+                    className="shrink-0 text-[var(--hud-text-faint)] hover:text-[var(--hud-red)] p-0.5 transition-colors"
+                  >
+                    <X size={10} />
+                  </button>
+                )}
               </div>
-            );
-          })}
-        </div>
-      )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -1575,7 +1559,7 @@ function ParamPanel({
         </div>
       )}
 
-      <Group title="Detail" code="§ DETAIL" defaultOpen={true} tone="accent">
+      <Group title="Detail" code="§ DETAIL" defaultOpen={false} tone="accent">
         <Slider
           label="VOXEL PITCH"
           code="δ"
