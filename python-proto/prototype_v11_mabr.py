@@ -499,11 +499,15 @@ def main() -> None:
     aligned_out = out_dir / f"{stem}_mabr_aligned{suffix}.stl"
     aligned.export(aligned_out)
     console.print(f"wrote {aligned_out.name}  faces={len(aligned.faces):,}")
-    if args.gun_decim_target and args.gun_decim_target < len(aligned.faces):
-        gun_dec = decimate(aligned, args.gun_decim_target)
+
+    if args.gun_decim_target:
         gun_dec_out = out_dir / f"{stem}_mabr_aligned_decim{args.gun_decim_target}{suffix}.stl"
-        gun_dec.export(gun_dec_out)
-        console.print(f"wrote {gun_dec_out.name}  faces={len(gun_dec.faces):,}")
+        if args.gun_decim_target < len(aligned.faces):
+            gun_dec = decimate(aligned, args.gun_decim_target)
+            gun_dec.export(gun_dec_out)
+        else:
+            aligned.export(gun_dec_out)
+        console.print(f"wrote {gun_dec_out.name} (target {args.gun_decim_target})")
 
     console.rule("Voxelize + sweep")
     occupancy, origin = voxelize_filled(aligned, args.voxel_pitch)
@@ -606,12 +610,13 @@ def main() -> None:
         targets = (args.decim_target,)
 
     for target in targets:
-        if target >= len(mesh.faces):
-            continue
-        dec = decimate(mesh, target)
         out = out_dir / f"{stem}_swept_mabr_{int(INSERTION_DEPTH_MM)}mm_decim{target}{suffix}.stl"
-        dec.export(out)
-        console.print(f"wrote {out.name}  faces={len(dec.faces):,}")
+        if target < len(mesh.faces):
+            dec = decimate(mesh, target)
+            dec.export(out)
+        else:
+            mesh.export(out)
+        console.print(f"wrote {out.name} (target {target})")
 
 
 if __name__ == "__main__":
