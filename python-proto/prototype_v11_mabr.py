@@ -528,18 +528,12 @@ def main() -> None:
     
     for idx, fid in enumerate(enabled_fids):
         state = features_state[fid]
-        
-        # TRANSFORMATION: Sync Viewer Space -> Backend Space
-        # The viewer rotates the gun 180deg around Y. 
-        # To match, we must flip X and Z of the incoming tags.
-        if "points" in state:
-            state["points"] = [
-                ([-p[0], p[1], -p[2]] if p is not None else None) 
-                for p in state["points"]
-            ]
-            
         pts = state.get("points") or []
-        if not pts or pts[0] is None:
+        
+        # Only skip if the feature DEFINES points but hasn't tagged any.
+        # Automatic features (0 points) should always run.
+        expected_pts = FEATURES_BY_ID.get(fid, {}).get("points", [])
+        if len(expected_pts) > 0 and (not pts or pts[0] is None):
             console.print(f"[yellow]{fid}: enabled but not tagged; skipping[/yellow]")
             continue
             

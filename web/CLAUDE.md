@@ -1,14 +1,10 @@
 # LLOD Holster Workshop Rules
 
 ## Coordinate Systems & Synchronization (CRITICAL)
-- **Viewer Space (Frontend):** Muzzle is +X, Grip is -X. (Rotated 180° for user comfort).
-- **Aligned Space (Backend):** Muzzle is -X, Grip is +X. (Standard calculation frame).
-- **Automated Flip:** The pipeline automatically flips incoming feature coordinates ([x, y, z] -> [-x, y, -z]) to bridge these spaces.
-
-## Universal Carver Rule
-- **Voxel Grid:** Index 0 is always the ENTRANCE (Grip).
-- **Direction:** To create a draw path, always carve from **index 0** (the entrance) to the feature's tagged location.
-- **Conversion Math (Aligned Space):** 
+- **Viewer Space (Frontend):** Muzzle is +X, Grip is -X.
+- **Voxel Space (Backend):** Index 0 is always the ENTRANCE (Grip).
+- **Coordinate Sync:** The carver logic must account for the fact that grid index `i` increases as world X decreases.
+- **Conversion Math:** 
     - `index_i = (insertion_vox - 1) - (world_x - min_x) / pitch`
     - `world_x = min_x + (insertion_vox - 1 - index_i) * pitch`
 

@@ -183,15 +183,16 @@ function MoldAssets({
   ]);
 
   const plug = useMemo((): PlugData => {
-    const fullCopy = full.clone();
-    fullCopy.computeBoundingBox();
-    const bb = fullCopy.boundingBox!;
-    const center = new THREE.Vector3();
-    const size = new THREE.Vector3();
-    bb.getCenter(center);
-    bb.getSize(size);
-
-    const shift: [number, number, number] = [-center.x, -center.y, -center.z];
+    // Shift to match backend centroid centering
+    // The backend uses aligned.vertices -= aligned.centroid
+    // We'll calculate a similar shift based on the gun's center
+    const gunBB = gun.clone();
+    gunBB.computeBoundingBox();
+    const gunCenter = new THREE.Vector3();
+    gunBB.boundingBox!.getCenter(gunCenter);
+    
+    // Use the gun's center as the global 'zero'
+    const shift: [number, number, number] = [-gunCenter.x, -gunCenter.y, -gunCenter.z];
 
     const fullPrepared = full.clone();
     fullPrepared.translate(...shift);
