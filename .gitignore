@@ -4,6 +4,7 @@
 *.nc
 python-proto/out/
 python-proto/cache/
+python-proto/jobs/
 
 # Python
 __pycache__/
