@@ -5,7 +5,7 @@ Used for angled rear cuts or other clean removals.
 """
 
 import numpy as np
-from features_frame import FeatureLocalFrame as FLF, rot_z
+from features_frame import flf_from_points, rot_z
 
 def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     nx, ny, nz = cavity_bin.shape
@@ -22,11 +22,11 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     
     # 2. Setup FLF
     pts = state.get("points", [])
-    if not pts or pts[0] is None:
+    flf = flf_from_points(pts)
+    if not flf:
         return cavity_f, origin
         
-    p0 = np.array(pts[0])
-    flf = FLF.from_muzzle_and_up(p0)
+    p0 = flf.origin
     
     # Feature rotation matrix
     R_local = rot_z(np.radians(rz_deg))
