@@ -6,9 +6,9 @@ A high-fidelity prototype for generating 3D-printable holster molds from firearm
 
 - **Automated Alignment:** Uses RANSAC plane detection to find the slide's thickness axis and Minimum Area Bounding Rectangle (MABR) for in-plane rotation.
 - **Functional Carving:** Generates holster cavity geometry via a swept voxel union approach, ensuring smooth "clay imprint" results.
-- **Parametric Features:**
-    - **Trigger Retention:** Add ramped triangular bumps with configurable offset, length, width, depth, and corner rounding.
-    - **Slide Release Relief:** Carve rectangular clearance channels for slide releases, swept forward to the holster entrance.
+- **Parametric Features:** Pluggable — each feature is a self-contained folder under `web/features/` with its metadata, R3F overlay, and Python carver. See [`web/features/README.md`](web/features/README.md) for the contract. Ships with:
+    - **Trigger Retention:** Ramped triangular indent with configurable offset, length, width, depth, and corner rounding.
+    - **Slide Release Relief:** Rectangular clearance channel, swept forward to the holster entrance.
 - **Voxel-to-Mesh Pipeline:**
     - Voxelization for robust handling of messy STL input.
     - Gaussian smoothing and Taubin mesh smoothing to eliminate stair-stepping on radiused edges.

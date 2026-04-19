@@ -28,6 +28,7 @@ import {
   RotateCw,
   Sparkles,
   Radio,
+  Power,
 } from "lucide-react";
 import {
   Panel,
@@ -43,6 +44,23 @@ import {
   ScanReticle,
   TypingLines,
 } from "@/components/hud";
+import {
+  FEATURES,
+  FEATURES_BY_ID,
+  publishedFeatures,
+  initialFeatureStates,
+  areAllFeaturesReady,
+  featureProgress,
+  type FeatureDef,
+  type FeatureState,
+  type FeatureStates,
+  type FeatureParam,
+  type NumberParam,
+  type SelectParam,
+  type ToggleParam,
+  type FeatureValue,
+} from "@/lib/features";
+import type { Vec3 } from "@/lib/featuresFrame";
 
 const Scene = dynamic(() => import("@/components/Scene").then((m) => m.Scene), {
   ssr: false,
@@ -55,7 +73,8 @@ type ProcessResponse = SceneAssets & {
   tgAnchor: TgAnchor | null;
 };
 
-type Params = {
+// Global pipeline parameters — not tied to any one feature.
+export type GlobalParams = {
   voxelPitch: number;
   smoothSigma: number;
   smoothIter: number;
@@ -63,23 +82,9 @@ type Params = {
   gunDecimTarget: number;
   mirror: boolean;
   rotateZDeg: number;
-  retention: boolean;
-  retentionFrontOffset: number;
-  retentionLength: number;
-  retentionWidthY: number;
-  retentionDepthZ: number;
-  retentionYOffset: number;
-  retentionRotateDeg: number;
-  retentionCornerRadius: number;
-  retentionOneSide: boolean;
-  srEnabled: boolean;
-  srWidthY: number;
-  srDepthZ: number;
-  srYOffset: number;
-  srChamfer: number;
 };
 
-const DEFAULT_PARAMS: Params = {
+const DEFAULT_GLOBAL_PARAMS: GlobalParams = {
   voxelPitch: 0.25,
   smoothSigma: 0.8,
   smoothIter: 10,
@@ -87,20 +92,6 @@ const DEFAULT_PARAMS: Params = {
   gunDecimTarget: 60000,
   mirror: false,
   rotateZDeg: 0,
-  retention: true,
-  retentionFrontOffset: 4,
-  retentionLength: 16,
-  retentionWidthY: 14,
-  retentionDepthZ: 4,
-  retentionYOffset: 0,
-  retentionRotateDeg: 0,
-  retentionCornerRadius: 2.0,
-  retentionOneSide: false,
-  srEnabled: true,
-  srWidthY: 12,
-  srDepthZ: 6,
-  srYOffset: 0,
-  srChamfer: 2.0,
 };
 
 const CAMEL_TO_SNAKE = (s: string) =>
@@ -118,6 +109,9 @@ export type PlacedAccessory = {
 };
 
 export type Step = 1 | 1.5 | 2 | 3;
+
+// Which feature point is the user actively tagging?
+export type ActiveTag = { featureId: string; pointIndex: number } | null;
 
 const STEP_META: Record<
   number,
@@ -151,28 +145,18 @@ const STEP_META: Record<
 
 const STEP_ORDER: Step[] = [1, 1.5, 2, 3];
 
-export type FeaturePoint = {
-  name: string;
-  label: string;
-  color: string;
-  coords: [number, number, number] | null;
-};
-
-const INITIAL_FEATURES: FeaturePoint[] = [
-  { name: "tg_front", label: "TRIGGER GUARD", color: "#FBBF24", coords: null },
-  { name: "slide_release", label: "SLIDE RELEASE", color: "#22D3EE", coords: null },
-  { name: "ejection_port", label: "EJECTION PORT", color: "#F87171", coords: null },
-];
+// ────────────────────────────────────────────────────────────────────
+// PAGE
+// ────────────────────────────────────────────────────────────────────
 
 export default function Page() {
   const [step, setStep] = useState<Step>(1);
   const [viewMode, setViewMode] = useState<ViewMode>("unified");
   const [accessories, setAccessories] = useState<string[]>([]);
-  const [featurePoints, setFeaturePoints] =
-    useState<FeaturePoint[]>(INITIAL_FEATURES);
-  const [activeFeatureIndex, setActiveFeatureIndex] = useState<number | null>(
-    null
+  const [featureStates, setFeatureStates] = useState<FeatureStates>(() =>
+    initialFeatureStates()
   );
+  const [activeTag, setActiveTag] = useState<ActiveTag>(null);
   const [alignedGunUrl, setAlignedGunUrl] = useState<string | null>(null);
   const [placedAccessories, setPlacedAccessories] = useState<PlacedAccessory[]>(
     []
@@ -186,8 +170,13 @@ export default function Page() {
   const [assets, setAssets] = useState<SceneAssets | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [params, setParams] = useState<Params>(DEFAULT_PARAMS);
-  const [generatedParams, setGeneratedParams] = useState<Params | null>(null);
+  const [globalParams, setGlobalParams] = useState<GlobalParams>(
+    DEFAULT_GLOBAL_PARAMS
+  );
+  const [generatedGlobalParams, setGeneratedGlobalParams] =
+    useState<GlobalParams | null>(null);
+  const [generatedFeatureStates, setGeneratedFeatureStates] =
+    useState<FeatureStates | null>(null);
   const [generatedFileName, setGeneratedFileName] = useState<string | null>(
     null
   );
@@ -204,9 +193,62 @@ export default function Page() {
       .catch((err) => console.error(err));
   }, []);
 
-  const updateParam = <K extends keyof Params>(key: K, value: Params[K]) => {
-    setParams((p) => ({ ...p, [key]: value }));
+  const updateGlobalParam = <K extends keyof GlobalParams>(
+    key: K,
+    value: GlobalParams[K]
+  ) => {
+    setGlobalParams((p) => ({ ...p, [key]: value }));
   };
+
+  const updateFeatureEnabled = useCallback(
+    (featureId: string, enabled: boolean) => {
+      setFeatureStates((prev) => ({
+        ...prev,
+        [featureId]: { ...prev[featureId], enabled },
+      }));
+    },
+    []
+  );
+
+  const updateFeatureValue = useCallback(
+    (featureId: string, paramId: string, value: FeatureValue) => {
+      setFeatureStates((prev) => ({
+        ...prev,
+        [featureId]: {
+          ...prev[featureId],
+          values: { ...prev[featureId].values, [paramId]: value },
+        },
+      }));
+    },
+    []
+  );
+
+  const clearFeaturePoint = useCallback(
+    (featureId: string, pointIndex: number) => {
+      setFeatureStates((prev) => {
+        const s = prev[featureId];
+        const pts = [...s.points];
+        pts[pointIndex] = null;
+        return { ...prev, [featureId]: { ...s, points: pts } };
+      });
+      setActiveTag({ featureId, pointIndex });
+    },
+    []
+  );
+
+  const onTagPoint = useCallback(
+    (featureId: string, pointIndex: number, coords: Vec3) => {
+      setFeatureStates((prev) => {
+        const s = prev[featureId];
+        const pts = [...s.points];
+        pts[pointIndex] = coords;
+        const next = { ...prev, [featureId]: { ...s, points: pts } };
+        setActiveTag(findNextUntaggedPoint(next, { featureId, pointIndex }));
+        return next;
+      });
+    },
+    []
+  );
 
   const addAccessory = (name: string) => {
     if (viewMode === "unified") return;
@@ -243,20 +285,8 @@ export default function Page() {
     rightUrl: API_BASE + urls.rightUrl,
   });
 
-  const onTagFeature = (index: number, coords: [number, number, number]) => {
-    setFeaturePoints((prev) =>
-      prev.map((fp, i) => (i === index ? { ...fp, coords } : fp))
-    );
-    const nextEmpty = featurePoints.findIndex(
-      (fp, i) => i > index && fp.coords === null
-    );
-    if (nextEmpty !== -1) {
-      setActiveFeatureIndex(nextEmpty);
-    }
-  };
-
   const processFile = useCallback(
-    async (file: File, withParams: Params) => {
+    async (file: File, withGlobals: GlobalParams) => {
       setError(null);
       setIsProcessing(true);
       setAssets(null);
@@ -264,41 +294,27 @@ export default function Page() {
       try {
         const form = new FormData();
         form.append("file", file);
-        for (const [k, v] of Object.entries(withParams)) {
+        for (const [k, v] of Object.entries(withGlobals)) {
           form.append(CAMEL_TO_SNAKE(k), String(v));
         }
         const res = await fetch(`${API_BASE}/api/align`, {
           method: "POST",
           body: form,
         });
-        if (!res.ok) {
-          let errorMsg = `${res.status}`;
-          try {
-            const body = await res.json();
-            if (body.detail && typeof body.detail === "object") {
-              errorMsg +=
-                ": " + (body.detail.stderr || JSON.stringify(body.detail));
-            } else {
-              errorMsg += ": " + (body.detail || JSON.stringify(body));
-            }
-          } catch {
-            const text = await res.text();
-            errorMsg += ": " + text.slice(0, 400);
-          }
-          throw new Error(errorMsg);
-        }
+        if (!res.ok) throw new Error(await readErr(res));
 
         const data = await res.json();
         setAlignedGunUrl(API_BASE + data.alignedUrl);
         setStep(1.5);
-        setActiveFeatureIndex(0);
+        // Activate the first un-tagged point on the first enabled+published feature.
+        setActiveTag(findNextUntaggedPoint(featureStates, null));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
         setIsProcessing(false);
       }
     },
-    []
+    [featureStates]
   );
 
   const generateMold = useCallback(async () => {
@@ -309,35 +325,22 @@ export default function Page() {
     try {
       const form = new FormData();
       form.append("file", uploadedFile);
-      for (const [k, v] of Object.entries(params)) {
+      for (const [k, v] of Object.entries(globalParams)) {
         form.append(CAMEL_TO_SNAKE(k), String(v));
       }
-      form.append("feature_points", JSON.stringify(featurePoints));
+      form.append("features_state", JSON.stringify(featureStates));
 
       const res = await fetch(`${API_BASE}/api/process`, {
         method: "POST",
         body: form,
       });
-      if (!res.ok) {
-        let errorMsg = `${res.status}`;
-        try {
-          const body = await res.json();
-          if (body.detail && typeof body.detail === "object") {
-            errorMsg +=
-              ": " + (body.detail.stderr || JSON.stringify(body.detail));
-          } else {
-            errorMsg += ": " + (body.detail || JSON.stringify(body));
-          }
-        } catch {
-          const text = await res.text();
-          errorMsg += ": " + text.slice(0, 400);
-        }
-        throw new Error(errorMsg);
-      }
+      if (!res.ok) throw new Error(await readErr(res));
+
       const data = (await res.json()) as ProcessResponse;
       setJobId(data.jobId);
       setAssets(absolutize(data));
-      setGeneratedParams(params);
+      setGeneratedGlobalParams(globalParams);
+      setGeneratedFeatureStates(featureStates);
       setGeneratedFileName(uploadedFile.name);
       window.setTimeout(() => setStep(3), 3000);
     } catch (err) {
@@ -346,7 +349,7 @@ export default function Page() {
     } finally {
       setIsProcessing(false);
     }
-  }, [uploadedFile, params, featurePoints]);
+  }, [uploadedFile, globalParams, featureStates]);
 
   const downloadHalf = async (side: "left" | "right") => {
     if (!jobId || !assets) return;
@@ -396,24 +399,30 @@ export default function Page() {
       if (!f) return;
       setFileName(f.name);
       setUploadedFile(f);
-      void processFile(f, params);
+      void processFile(f, globalParams);
     },
-    [params, processFile]
+    [globalParams, processFile]
   );
 
   const rerun = useCallback(() => {
     if (!uploadedFile) return;
     const alignmentChanged =
-      !generatedParams ||
-      params.mirror !== generatedParams.mirror ||
-      params.rotateZDeg !== generatedParams.rotateZDeg;
+      !generatedGlobalParams ||
+      globalParams.mirror !== generatedGlobalParams.mirror ||
+      globalParams.rotateZDeg !== generatedGlobalParams.rotateZDeg;
 
     if (alignmentChanged) {
-      void processFile(uploadedFile, params);
+      void processFile(uploadedFile, globalParams);
     } else {
       void generateMold();
     }
-  }, [uploadedFile, params, generatedParams, processFile, generateMold]);
+  }, [
+    uploadedFile,
+    globalParams,
+    generatedGlobalParams,
+    processFile,
+    generateMold,
+  ]);
 
   const reset = () => {
     setStep(1);
@@ -422,12 +431,13 @@ export default function Page() {
     setAssets(null);
     setJobId(null);
     setAlignedGunUrl(null);
-    setActiveFeatureIndex(null);
-    setFeaturePoints(INITIAL_FEATURES.map((f) => ({ ...f, coords: null })));
+    setActiveTag(null);
+    setFeatureStates(initialFeatureStates());
     setPlacedAccessories([]);
     setError(null);
     setIsProcessing(false);
-    setGeneratedParams(null);
+    setGeneratedGlobalParams(null);
+    setGeneratedFeatureStates(null);
     setGeneratedFileName(null);
   };
 
@@ -443,7 +453,6 @@ export default function Page() {
 
   return (
     <div className="h-screen flex flex-col overflow-hidden font-mono text-[var(--hud-text)]">
-      {/* ─── TOP BAR ──────────────────────────────────────── */}
       <TopBar
         step={step}
         systemState={systemState}
@@ -453,17 +462,16 @@ export default function Page() {
         hasJob={!!jobId}
       />
 
-      {/* ─── MAIN GRID ────────────────────────────────────── */}
       <div className="flex-1 flex min-h-0">
-        {/* ─── LEFT RAIL ────────────────────────────────── */}
         <aside className="w-[360px] shrink-0 border-r border-[var(--hud-line)] bg-[var(--hud-panel)]/60 hud-grid overflow-y-auto hud-scroll animate-hud-slide-left">
           <div className="p-3 flex flex-col gap-3">
-            {/* STEP CONTEXT */}
             <StepContext
               step={step}
-              featurePoints={featurePoints}
-              activeFeatureIndex={activeFeatureIndex}
-              setActiveFeatureIndex={setActiveFeatureIndex}
+              featureStates={featureStates}
+              activeTag={activeTag}
+              setActiveTag={setActiveTag}
+              updateFeatureEnabled={updateFeatureEnabled}
+              clearFeaturePoint={clearFeaturePoint}
               isProcessing={isProcessing}
               uploadedFile={uploadedFile}
               fileName={fileName}
@@ -484,18 +492,19 @@ export default function Page() {
               reset={reset}
             />
 
-            {/* PARAMETERS */}
             <Panel title="Processing Parameters" id="§ PROC.PARAMS">
               <ParamPanel
-                params={params}
-                update={updateParam}
+                globalParams={globalParams}
+                updateGlobalParam={updateGlobalParam}
+                featureStates={featureStates}
+                updateFeatureEnabled={updateFeatureEnabled}
+                updateFeatureValue={updateFeatureValue}
                 disabled={isProcessing}
                 canRerun={!!uploadedFile}
                 onRerun={rerun}
               />
             </Panel>
 
-            {/* ERROR PANEL */}
             {error && (
               <section className="hud-panel border-[rgba(239,68,68,0.45)]">
                 <div className="p-3 flex items-start gap-2">
@@ -517,31 +526,29 @@ export default function Page() {
           </div>
         </aside>
 
-        {/* ─── VIEWPORT ─────────────────────────────────── */}
         <main className="flex-1 relative min-w-0 animate-hud-fade-up">
           <Scene
             step={step}
             viewMode={viewMode}
             assets={assets}
             alignedGunUrl={alignedGunUrl}
-            featurePoints={featurePoints}
-            activeFeatureIndex={activeFeatureIndex}
-            onTagFeature={onTagFeature}
+            featureStates={featureStates}
+            activeTag={activeTag}
+            onTagPoint={onTagPoint}
             placedAccessories={placedAccessories}
             activeAccessoryId={activeAccessoryId}
             onUpdateAccessory={updateAccessory}
             onSetActiveAccessory={setActiveAccessoryId}
-            params={params}
           />
 
-          {/* HUD overlay chrome */}
           <ViewportHUD
             step={step}
             viewMode={viewMode}
             isProcessing={isProcessing}
-            featurePoints={featurePoints}
-            activeFeatureIndex={activeFeatureIndex}
-            generatedParams={generatedParams}
+            featureStates={featureStates}
+            activeTag={activeTag}
+            generatedGlobalParams={generatedGlobalParams}
+            generatedFeatureStates={generatedFeatureStates}
             generatedFileName={generatedFileName}
             jobId={jobIdDisplay}
           />
@@ -551,9 +558,57 @@ export default function Page() {
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
+async function readErr(res: Response): Promise<string> {
+  let msg = `${res.status}`;
+  try {
+    const body = await res.json();
+    if (body.detail && typeof body.detail === "object") {
+      msg += ": " + (body.detail.stderr || JSON.stringify(body.detail));
+    } else {
+      msg += ": " + (body.detail || JSON.stringify(body));
+    }
+  } catch {
+    const text = await res.text();
+    msg += ": " + text.slice(0, 400);
+  }
+  return msg;
+}
+
+// Find the next un-tagged point across published, enabled features, starting
+// just after `after`. Returns null if everything required is tagged.
+function findNextUntaggedPoint(
+  states: FeatureStates,
+  after: { featureId: string; pointIndex: number } | null
+): ActiveTag {
+  const defs = publishedFeatures();
+  const startIdx = after
+    ? Math.max(0, defs.findIndex((d) => d.id === after.featureId))
+    : 0;
+  // First pass: continue from `after` (or the beginning).
+  for (let i = startIdx; i < defs.length; i++) {
+    const def = defs[i];
+    const st = states[def.id];
+    if (!st?.enabled) continue;
+    for (let p = 0; p < def.points.length; p++) {
+      if (after && i === startIdx && p <= after.pointIndex) continue;
+      if (st.points[p] === null) return { featureId: def.id, pointIndex: p };
+    }
+  }
+  // Second pass: wrap back around to pick up earlier untagged slots.
+  for (let i = 0; i < defs.length; i++) {
+    const def = defs[i];
+    const st = states[def.id];
+    if (!st?.enabled) continue;
+    for (let p = 0; p < def.points.length; p++) {
+      if (st.points[p] === null) return { featureId: def.id, pointIndex: p };
+    }
+  }
+  return null;
+}
+
+// ────────────────────────────────────────────────────────────────────
 // TOP BAR
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 
 function TopBar({
   step,
@@ -570,12 +625,8 @@ function TopBar({
   onReset: () => void;
   hasJob: boolean;
 }) {
-  const sysLabel =
-    systemState === "err" ? "FAULT" : systemState === "warn" ? "BUSY" : "NOMINAL";
-
   return (
     <header className="relative border-b border-[var(--hud-line)] bg-[var(--hud-void)]/80 backdrop-blur-md h-12 flex items-center px-4 shrink-0 z-10">
-      {/* Brand */}
       <div className="flex items-center gap-3">
         <Logo />
         <div className="flex flex-col leading-tight">
@@ -590,10 +641,8 @@ function TopBar({
 
       <div className="h-6 w-px bg-[var(--hud-line-strong)] mx-5" />
 
-      {/* Step rail */}
       <StepRail step={step} />
 
-      {/* Right cluster */}
       <div className="ml-auto flex items-center gap-4">
         {fileName && (
           <div className="flex items-center gap-2 text-[10px] font-mono">
@@ -694,15 +743,17 @@ function StepRail({ step }: { step: Step }) {
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
-// STEP CONTEXT (LEFT RAIL SWITCH)
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
+// STEP CONTEXT
+// ────────────────────────────────────────────────────────────────────
 
 function StepContext(props: {
   step: Step;
-  featurePoints: FeaturePoint[];
-  activeFeatureIndex: number | null;
-  setActiveFeatureIndex: (i: number | null) => void;
+  featureStates: FeatureStates;
+  activeTag: ActiveTag;
+  setActiveTag: (t: ActiveTag) => void;
+  updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
+  clearFeaturePoint: (featureId: string, pointIndex: number) => void;
   isProcessing: boolean;
   uploadedFile: File | null;
   fileName: string | null;
@@ -724,9 +775,11 @@ function StepContext(props: {
 }) {
   const {
     step,
-    featurePoints,
-    activeFeatureIndex,
-    setActiveFeatureIndex,
+    featureStates,
+    activeTag,
+    setActiveTag,
+    updateFeatureEnabled,
+    clearFeaturePoint,
     isProcessing,
     uploadedFile,
     fileName,
@@ -748,8 +801,7 @@ function StepContext(props: {
   } = props;
 
   const meta = STEP_META[step];
-  const tone: "default" | "accent" | "warn" =
-    step === 2 ? "warn" : "accent";
+  const tone: "default" | "accent" | "warn" = step === 2 ? "warn" : "accent";
 
   return (
     <Panel
@@ -775,17 +827,16 @@ function StepContext(props: {
       )}
 
       {step === 1 && isProcessing && (
-        <ProcessingIndicator
-          label={`Aligning 3D Scan`}
-          fileName={fileName}
-        />
+        <ProcessingIndicator label="Aligning 3D Scan" fileName={fileName} />
       )}
 
       {step === 1.5 && (
         <FeatureTagger
-          featurePoints={featurePoints}
-          activeFeatureIndex={activeFeatureIndex}
-          setActiveFeatureIndex={setActiveFeatureIndex}
+          featureStates={featureStates}
+          activeTag={activeTag}
+          setActiveTag={setActiveTag}
+          updateFeatureEnabled={updateFeatureEnabled}
+          clearFeaturePoint={clearFeaturePoint}
           onGenerate={generateMold}
         />
       )}
@@ -813,9 +864,9 @@ function StepContext(props: {
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 // STEP 1 — UPLOAD DROPZONE
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 
 function UploadDropzone({
   handleUpload,
@@ -868,62 +919,77 @@ function UploadDropzone({
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 // STEP 1.5 — FEATURE TAGGER
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 
 function FeatureTagger({
-  featurePoints,
-  activeFeatureIndex,
-  setActiveFeatureIndex,
+  featureStates,
+  activeTag,
+  setActiveTag,
+  updateFeatureEnabled,
+  clearFeaturePoint,
   onGenerate,
 }: {
-  featurePoints: FeaturePoint[];
-  activeFeatureIndex: number | null;
-  setActiveFeatureIndex: (i: number | null) => void;
+  featureStates: FeatureStates;
+  activeTag: ActiveTag;
+  setActiveTag: (t: ActiveTag) => void;
+  updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
+  clearFeaturePoint: (featureId: string, pointIndex: number) => void;
   onGenerate: () => void;
 }) {
-  const allSet = featurePoints.every((fp) => fp.coords !== null);
-  const progress = featurePoints.filter((fp) => fp.coords !== null).length;
+  const defs = publishedFeatures();
+  const { tagged, required } = defs.reduce(
+    (acc, def) => {
+      const s = featureStates[def.id];
+      if (!s?.enabled) return acc;
+      const { tagged, required } = featureProgress(def, s);
+      return { tagged: acc.tagged + tagged, required: acc.required + required };
+    },
+    { tagged: 0, required: 0 }
+  );
+  const ready = areAllFeaturesReady(featureStates);
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between text-[10px] font-mono">
-        <span className="text-[var(--hud-text-dim)]">
-          ALIGNMENT PROGRESS
-        </span>
+        <span className="text-[var(--hud-text-dim)]">ALIGNMENT PROGRESS</span>
         <span className="text-[var(--hud-teal-bright)] tabular-nums">
-          {progress}/{featurePoints.length}
+          {tagged}/{required}
         </span>
       </div>
-      <div className="flex gap-1">
-        {featurePoints.map((fp, i) => (
-          <div
-            key={fp.name}
-            className={`flex-1 h-[3px] ${
-              fp.coords
-                ? "bg-[var(--hud-teal-bright)] shadow-[0_0_6px_rgba(94,234,212,0.6)]"
-                : "bg-[var(--hud-text-ghost)]"
-            }`}
-          />
-        ))}
-      </div>
+      {required > 0 && (
+        <div className="flex gap-1">
+          {Array.from({ length: required }).map((_, i) => (
+            <div
+              key={i}
+              className={`flex-1 h-[3px] ${
+                i < tagged
+                  ? "bg-[var(--hud-teal-bright)] shadow-[0_0_6px_rgba(94,234,212,0.6)]"
+                  : "bg-[var(--hud-text-ghost)]"
+              }`}
+            />
+          ))}
+        </div>
+      )}
 
-      <div className="flex flex-col gap-1.5">
-        {featurePoints.map((fp, i) => (
-          <FeatureButton
-            key={fp.name}
-            fp={fp}
-            idx={i}
-            active={activeFeatureIndex === i}
-            onClick={() => setActiveFeatureIndex(i)}
+      <div className="flex flex-col gap-2">
+        {defs.map((def) => (
+          <FeatureTagCard
+            key={def.id}
+            def={def}
+            state={featureStates[def.id]}
+            activeTag={activeTag}
+            setActiveTag={setActiveTag}
+            updateFeatureEnabled={updateFeatureEnabled}
+            clearFeaturePoint={clearFeaturePoint}
           />
         ))}
       </div>
 
       <Button
         variant="primary"
-        disabled={!allSet}
+        disabled={!ready}
         onClick={onGenerate}
         icon={<Zap size={12} />}
       >
@@ -933,80 +999,173 @@ function FeatureTagger({
   );
 }
 
-function FeatureButton({
-  fp,
-  idx,
-  active,
-  onClick,
+function FeatureTagCard({
+  def,
+  state,
+  activeTag,
+  setActiveTag,
+  updateFeatureEnabled,
+  clearFeaturePoint,
 }: {
-  fp: FeaturePoint;
-  idx: number;
-  active: boolean;
-  onClick: () => void;
+  def: FeatureDef;
+  state: FeatureState;
+  activeTag: ActiveTag;
+  setActiveTag: (t: ActiveTag) => void;
+  updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
+  clearFeaturePoint: (featureId: string, pointIndex: number) => void;
 }) {
+  const { tagged, required, complete } = featureProgress(def, state);
+
   return (
-    <button
-      onClick={onClick}
-      className={`group/f relative text-left px-2.5 py-2 border transition-all ${
-        active
-          ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.08)] shadow-[inset_0_0_12px_rgba(45,212,191,0.06)]"
-          : fp.coords
-          ? "border-[var(--hud-line)] hover:border-[var(--hud-teal)] bg-[var(--hud-panel-2)]"
-          : "border-[var(--hud-text-ghost)] hover:border-[var(--hud-line-strong)] bg-transparent"
+    <div
+      className={`border transition-all ${
+        !state.enabled
+          ? "border-[var(--hud-text-ghost)] bg-transparent opacity-70"
+          : complete
+          ? "border-[var(--hud-line)] bg-[var(--hud-panel-2)]"
+          : "border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)]"
       }`}
     >
-      <div className="flex items-center gap-2">
-        <div className="relative flex items-center justify-center w-5 h-5">
+      {/* Header row: enable toggle + label + progress */}
+      <div className="flex items-center gap-2 px-2.5 py-2 border-b border-[var(--hud-line)]">
+        <button
+          onClick={() => {
+            const next = !state.enabled;
+            updateFeatureEnabled(def.id, next);
+            if (!next && activeTag?.featureId === def.id) setActiveTag(null);
+          }}
+          className={`group/pw shrink-0 w-6 h-6 border flex items-center justify-center transition-colors ${
+            state.enabled
+              ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.12)] text-[var(--hud-teal-bright)] shadow-[0_0_6px_rgba(45,212,191,0.35)]"
+              : "border-[var(--hud-text-ghost)] text-[var(--hud-text-faint)] hover:border-[var(--hud-line-strong)]"
+          }`}
+          title={state.enabled ? "Disable feature" : "Enable feature"}
+          aria-pressed={state.enabled}
+        >
+          <Power size={11} />
+        </button>
+        <div className="relative w-3 h-3 shrink-0">
           <div
-            className="absolute inset-0 opacity-20"
-            style={{ background: fp.color, filter: "blur(6px)" }}
+            className="absolute inset-0 opacity-30"
+            style={{ background: def.color, filter: "blur(4px)" }}
           />
           <div
-            className="relative w-2.5 h-2.5"
+            className="relative w-3 h-3"
             style={{
-              background: fp.coords ? fp.color : "transparent",
-              border: `1px solid ${fp.color}`,
-              boxShadow: fp.coords ? `0 0 6px ${fp.color}` : "none",
+              background: state.enabled ? def.color : "transparent",
+              border: `1px solid ${def.color}`,
+              boxShadow: state.enabled ? `0 0 5px ${def.color}` : "none",
             }}
           />
         </div>
-        <div className="flex flex-col min-w-0 flex-1">
-          <div className="flex items-baseline gap-2">
-            <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
-              T.{String(idx + 1).padStart(2, "0")}
-            </span>
-            <span className="font-display text-[11px] uppercase tracking-wider text-[var(--hud-text)] truncate">
-              {fp.label}
-            </span>
-          </div>
-          {fp.coords ? (
-            <span className="font-mono text-[9.5px] text-[var(--hud-text-dim)] tabular-nums mt-0.5">
-              X {fp.coords[0].toFixed(1)}
-              <span className="text-[var(--hud-text-ghost)]">·</span>
-              Y {fp.coords[1].toFixed(1)}
-              <span className="text-[var(--hud-text-ghost)]">·</span>
-              Z {fp.coords[2].toFixed(1)}
-            </span>
-          ) : (
-            <span className="font-mono text-[9.5px] text-[var(--hud-text-faint)] italic mt-0.5">
-              {active ? "AWAITING CLICK ON MODEL" : "UNSET"}
-            </span>
-          )}
-        </div>
-        {active && (
-          <Crosshair
-            size={14}
-            className="text-[var(--hud-teal-bright)] animate-hud-blink shrink-0"
-          />
+        <span
+          className={`font-display text-[11px] uppercase tracking-wider flex-1 truncate ${
+            state.enabled
+              ? "text-[var(--hud-text)]"
+              : "text-[var(--hud-text-faint)]"
+          }`}
+        >
+          {def.label}
+        </span>
+        {state.enabled && (
+          <span className="font-mono text-[9px] text-[var(--hud-text-dim)] tabular-nums">
+            {tagged}/{required}
+          </span>
         )}
       </div>
-    </button>
+
+      {/* Point chips — only when enabled */}
+      {state.enabled && (
+        <div className="flex flex-col gap-1 p-2">
+          {def.points.map((slot, i) => {
+            const active =
+              activeTag?.featureId === def.id && activeTag.pointIndex === i;
+            const coord = state.points[i];
+            return (
+              <div
+                key={slot.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => setActiveTag({ featureId: def.id, pointIndex: i })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    setActiveTag({ featureId: def.id, pointIndex: i });
+                  }
+                }}
+                className={`group/p relative text-left px-2 py-1.5 border transition-all cursor-pointer ${
+                  active
+                    ? "border-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.08)]"
+                    : coord
+                    ? "border-[var(--hud-line)] hover:border-[var(--hud-teal)]"
+                    : "border-[var(--hud-text-ghost)] hover:border-[var(--hud-line-strong)]"
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <div className="relative flex items-center justify-center w-4 h-4 shrink-0">
+                    <div
+                      className="relative w-2 h-2"
+                      style={{
+                        background: coord ? def.color : "transparent",
+                        border: `1px solid ${def.color}`,
+                        boxShadow: coord ? `0 0 5px ${def.color}` : "none",
+                      }}
+                    />
+                  </div>
+                  <div className="flex flex-col min-w-0 flex-1">
+                    <div className="flex items-baseline gap-2">
+                      <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
+                        P.{String(i + 1).padStart(2, "0")}
+                      </span>
+                      <span className="font-display text-[10.5px] uppercase tracking-wider text-[var(--hud-text)] truncate">
+                        {slot.label}
+                      </span>
+                    </div>
+                    {coord ? (
+                      <span className="font-mono text-[9px] text-[var(--hud-text-dim)] tabular-nums mt-0.5">
+                        X {coord[0].toFixed(1)}
+                        <span className="text-[var(--hud-text-ghost)]"> · </span>
+                        Y {coord[1].toFixed(1)}
+                        <span className="text-[var(--hud-text-ghost)]"> · </span>
+                        Z {coord[2].toFixed(1)}
+                      </span>
+                    ) : (
+                      <span className="font-mono text-[9px] text-[var(--hud-text-faint)] italic mt-0.5">
+                        {active ? "AWAITING CLICK ON MODEL" : "UNSET"}
+                      </span>
+                    )}
+                  </div>
+                  {active && (
+                    <Crosshair
+                      size={12}
+                      className="text-[var(--hud-teal-bright)] animate-hud-blink shrink-0"
+                    />
+                  )}
+                  {coord && !active && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        clearFeaturePoint(def.id, i);
+                      }}
+                      className="shrink-0 text-[var(--hud-text-faint)] hover:text-[var(--hud-red)] p-0.5"
+                      title="Clear this point"
+                    >
+                      <X size={10} />
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 // STEP 2 — PROCESSING STATUS
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 
 function ProcessingStatus({ fileName }: { fileName: string | null }) {
   const lines = useMemo(
@@ -1070,9 +1229,9 @@ function ProcessingIndicator({
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 // STEP 3 — EXPORT PANEL
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 
 function ExportPanel({
   viewMode,
@@ -1109,7 +1268,6 @@ function ExportPanel({
 
   return (
     <div className="flex flex-col gap-3">
-      {/* View selector */}
       <div>
         <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider mb-1.5">
           // WORKBENCH.VIEW
@@ -1160,7 +1318,6 @@ function ExportPanel({
         </div>
       </div>
 
-      {/* Accessories when on a specific half */}
       {viewMode !== "unified" && (
         <div className="flex flex-col gap-2.5 animate-hud-fade-up">
           <div className="flex items-center justify-between">
@@ -1212,7 +1369,6 @@ function ExportPanel({
         </div>
       )}
 
-      {/* Export actions */}
       <div className="flex flex-col gap-1.5 pt-2 border-t border-[var(--hud-line)]">
         <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider mb-1">
           // EXPORT.TARGETS
@@ -1371,19 +1527,32 @@ function AccessoryCard({
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 // PARAMETER PANEL
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 
 function ParamPanel({
-  params,
-  update,
+  globalParams,
+  updateGlobalParam,
+  featureStates,
+  updateFeatureEnabled,
+  updateFeatureValue,
   disabled,
   canRerun,
   onRerun,
 }: {
-  params: Params;
-  update: <K extends keyof Params>(key: K, value: Params[K]) => void;
+  globalParams: GlobalParams;
+  updateGlobalParam: <K extends keyof GlobalParams>(
+    key: K,
+    value: GlobalParams[K]
+  ) => void;
+  featureStates: FeatureStates;
+  updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
+  updateFeatureValue: (
+    featureId: string,
+    paramId: string,
+    value: FeatureValue
+  ) => void;
   disabled: boolean;
   canRerun: boolean;
   onRerun: () => void;
@@ -1396,7 +1565,9 @@ function ParamPanel({
             variant="primary"
             onClick={onRerun}
             disabled={disabled}
-            icon={<RefreshCw size={11} className={disabled ? "animate-spin" : ""} />}
+            icon={
+              <RefreshCw size={11} className={disabled ? "animate-spin" : ""} />
+            }
             className="w-full"
           >
             Recompile
@@ -1409,44 +1580,44 @@ function ParamPanel({
           label="VOXEL PITCH"
           code="δ"
           unit="mm"
-          value={params.voxelPitch}
+          value={globalParams.voxelPitch}
           min={0.2}
           max={0.5}
           step={0.05}
           hint="Lower = more surface detail, more compute."
-          onChange={(v) => update("voxelPitch", v)}
+          onChange={(v) => updateGlobalParam("voxelPitch", v)}
           disabled={disabled}
         />
         <Slider
           label="SMOOTH σ"
           code="σ"
           unit="vox"
-          value={params.smoothSigma}
+          value={globalParams.smoothSigma}
           min={0}
           max={2}
           step={0.1}
           hint="Gaussian pre-marching-cubes smoothing."
-          onChange={(v) => update("smoothSigma", v)}
+          onChange={(v) => updateGlobalParam("smoothSigma", v)}
           disabled={disabled}
         />
         <Slider
           label="SMOOTH ITER"
           code="n"
           unit="iter"
-          value={params.smoothIter}
+          value={globalParams.smoothIter}
           min={0}
           max={50}
           step={1}
           hint="Post-MC Taubin (removes stair-stepping)."
-          onChange={(v) => update("smoothIter", v)}
+          onChange={(v) => updateGlobalParam("smoothIter", v)}
           disabled={disabled}
         />
         <Select
           label="PLUG FACES"
           code="Σf"
-          value={params.plugDecimTarget}
+          value={globalParams.plugDecimTarget}
           options={[8000, 15000, 30000, 60000, 120000]}
-          onChange={(v) => update("plugDecimTarget", v)}
+          onChange={(v) => updateGlobalParam("plugDecimTarget", v)}
           disabled={disabled}
         />
       </Group>
@@ -1455,216 +1626,172 @@ function ParamPanel({
         <Toggle
           label="MIRROR Z"
           code="⇌"
-          checked={params.mirror}
+          checked={globalParams.mirror}
           hint="Flip if slide release / ejection side is inverted."
-          onChange={(v) => update("mirror", v)}
+          onChange={(v) => updateGlobalParam("mirror", v)}
           disabled={disabled}
         />
         <Slider
           label="ROTATE Z"
           code="↻"
           unit="deg"
-          value={params.rotateZDeg}
+          value={globalParams.rotateZDeg}
           min={-45}
           max={45}
           step={1}
           hint="Correction for MABR alignment errors."
-          onChange={(v) => update("rotateZDeg", v)}
+          onChange={(v) => updateGlobalParam("rotateZDeg", v)}
           disabled={disabled}
         />
       </Group>
 
-      <Group title="Trigger Retention" code="§ RET.TRIG" tone="warn">
-        <Toggle
-          label="ENABLED"
-          checked={params.retention}
-          hint="Triangle indent behind TG front edge."
-          onChange={(v) => update("retention", v)}
-          disabled={disabled}
-        />
-        <Slider
-          label="FRONT OFFSET"
-          code="Δx"
-          unit="mm"
-          value={params.retentionFrontOffset}
-          min={0}
-          max={20}
-          step={0.5}
-          onChange={(v) => update("retentionFrontOffset", v)}
-          disabled={disabled || !params.retention}
-        />
-        <Slider
-          label="LENGTH"
-          code="L"
-          unit="mm"
-          value={params.retentionLength}
-          min={4}
-          max={40}
-          step={1}
-          onChange={(v) => update("retentionLength", v)}
-          disabled={disabled || !params.retention}
-        />
-        <Slider
-          label="WIDTH Y"
-          code="W"
-          unit="mm"
-          value={params.retentionWidthY}
-          min={4}
-          max={30}
-          step={1}
-          onChange={(v) => update("retentionWidthY", v)}
-          disabled={disabled || !params.retention}
-        />
-        <Slider
-          label="DEPTH Z"
-          code="D"
-          unit="mm"
-          value={params.retentionDepthZ}
-          min={0.5}
-          max={10}
-          step={0.1}
-          onChange={(v) => update("retentionDepthZ", v)}
-          disabled={disabled || !params.retention}
-        />
-        <Slider
-          label="Y OFFSET"
-          code="Δy"
-          unit="mm"
-          value={params.retentionYOffset}
-          min={-15}
-          max={15}
-          step={0.5}
-          onChange={(v) => update("retentionYOffset", v)}
-          disabled={disabled || !params.retention}
-        />
-        <Slider
-          label="ROTATE Z"
-          code="θ"
-          unit="deg"
-          value={params.retentionRotateDeg}
-          min={-90}
-          max={90}
-          step={1}
-          onChange={(v) => update("retentionRotateDeg", v)}
-          disabled={disabled || !params.retention}
-        />
-        <Slider
-          label="RADIUS"
-          code="r"
-          unit="mm"
-          value={params.retentionCornerRadius}
-          min={0}
-          max={10}
-          step={0.5}
-          hint="Round the triangle's sharp corners."
-          onChange={(v) => update("retentionCornerRadius", v)}
-          disabled={disabled || !params.retention}
-        />
-        <Toggle
-          label="ONE SIDE"
-          code="±"
-          checked={params.retentionOneSide}
-          hint="Default carves both sides of plug."
-          onChange={(v) => update("retentionOneSide", v)}
-          disabled={disabled || !params.retention}
-        />
-      </Group>
-
-      <Group title="Slide Release Relief" code="§ REL.SR" tone="warn">
-        <Toggle
-          label="ENABLED"
-          checked={params.srEnabled}
-          hint="Clearance channel for slide release."
-          onChange={(v) => update("srEnabled", v)}
-          disabled={disabled}
-        />
-        <Slider
-          label="WIDTH Y"
-          code="W"
-          unit="mm"
-          value={params.srWidthY}
-          min={4}
-          max={30}
-          step={1}
-          onChange={(v) => update("srWidthY", v)}
-          disabled={disabled || !params.srEnabled}
-        />
-        <Slider
-          label="DEPTH Z"
-          code="D"
-          unit="mm"
-          value={params.srDepthZ}
-          min={2}
-          max={15}
-          step={0.5}
-          onChange={(v) => update("srDepthZ", v)}
-          disabled={disabled || !params.srEnabled}
-        />
-        <Slider
-          label="Y OFFSET"
-          code="Δy"
-          unit="mm"
-          value={params.srYOffset}
-          min={-10}
-          max={10}
-          step={0.5}
-          onChange={(v) => update("srYOffset", v)}
-          disabled={disabled || !params.srEnabled}
-        />
-        <Slider
-          label="CHAMFER"
-          code="c"
-          unit="mm"
-          value={params.srChamfer}
-          min={0}
-          max={10}
-          step={0.5}
-          hint="45° cut on outer corners."
-          onChange={(v) => update("srChamfer", v)}
-          disabled={disabled || !params.srEnabled}
-        />
-      </Group>
+      {publishedFeatures().map((def) => {
+        const state = featureStates[def.id];
+        if (!state?.enabled) return null;
+        return (
+          <FeatureParamGroup
+            key={def.id}
+            def={def}
+            state={state}
+            onToggleEnabled={(v) => updateFeatureEnabled(def.id, v)}
+            onUpdate={(paramId, value) =>
+              updateFeatureValue(def.id, paramId, value)
+            }
+            disabled={disabled}
+          />
+        );
+      })}
     </div>
   );
 }
 
-// ──────────────────────────────────────────────────────────────────
+function FeatureParamGroup({
+  def,
+  state,
+  onToggleEnabled,
+  onUpdate,
+  disabled,
+}: {
+  def: FeatureDef;
+  state: FeatureState;
+  onToggleEnabled: (v: boolean) => void;
+  onUpdate: (paramId: string, value: FeatureValue) => void;
+  disabled: boolean;
+}) {
+  const code = `§ ${def.id.toUpperCase().replace(/_/g, ".")}`;
+  return (
+    <Group title={def.label} code={code} tone="warn">
+      <Toggle
+        label="ENABLED"
+        checked={state.enabled}
+        hint={def.description}
+        onChange={onToggleEnabled}
+        disabled={disabled}
+      />
+      {def.params.map((p) => {
+        if (p.type === "number") {
+          return (
+            <Slider
+              key={p.id}
+              label={p.label.toUpperCase()}
+              code={p.code}
+              unit={p.unit}
+              value={Number(state.values[p.id] ?? p.default)}
+              min={p.min}
+              max={p.max}
+              step={p.step}
+              hint={p.hint}
+              onChange={(v) => onUpdate(p.id, v)}
+              disabled={disabled}
+            />
+          );
+        }
+        if (p.type === "toggle") {
+          return (
+            <Toggle
+              key={p.id}
+              label={p.label.toUpperCase()}
+              code={p.code}
+              checked={Boolean(state.values[p.id] ?? p.default)}
+              hint={p.hint}
+              onChange={(v) => onUpdate(p.id, v)}
+              disabled={disabled}
+            />
+          );
+        }
+        // select (numeric)
+        return (
+          <Select
+            key={p.id}
+            label={p.label.toUpperCase()}
+            code={p.code}
+            value={Number(state.values[p.id] ?? p.default)}
+            options={p.options}
+            onChange={(v) => onUpdate(p.id, v)}
+            disabled={disabled}
+          />
+        );
+      })}
+    </Group>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────
 // VIEWPORT HUD OVERLAY
-// ──────────────────────────────────────────────────────────────────
+// ────────────────────────────────────────────────────────────────────
 
 function ViewportHUD({
   step,
   viewMode,
   isProcessing,
-  featurePoints,
-  activeFeatureIndex,
-  generatedParams,
+  featureStates,
+  activeTag,
+  generatedGlobalParams,
+  generatedFeatureStates,
   generatedFileName,
   jobId,
 }: {
   step: Step;
   viewMode: ViewMode;
   isProcessing: boolean;
-  featurePoints: FeaturePoint[];
-  activeFeatureIndex: number | null;
-  generatedParams: Params | null;
+  featureStates: FeatureStates;
+  activeTag: ActiveTag;
+  generatedGlobalParams: GlobalParams | null;
+  generatedFeatureStates: FeatureStates | null;
   generatedFileName: string | null;
   jobId: string;
 }) {
+  const activeSlotLabel = (() => {
+    if (!activeTag) return null;
+    const def = FEATURES_BY_ID[activeTag.featureId];
+    if (!def) return null;
+    const slot = def.points[activeTag.pointIndex];
+    return slot ? `${def.label} :: ${slot.label}` : def.label;
+  })();
+
   const modeLabel =
     step === 1
       ? "AWAITING 3D SCAN"
       : step === 1.5
-      ? activeFeatureIndex !== null
-        ? `TAG :: ${featurePoints[activeFeatureIndex].label}`
+      ? activeSlotLabel
+        ? `TAG :: ${activeSlotLabel}`
         : "ALIGNMENT ACQUISITION"
       : step === 2
       ? "PROCESSING"
       : `EXPORT · ${viewMode.toUpperCase()}`;
 
+  const { tagged, required } = publishedFeatures().reduce(
+    (acc, def) => {
+      const s = featureStates[def.id];
+      if (!s?.enabled) return acc;
+      const { tagged, required } = featureProgress(def, s);
+      return { tagged: acc.tagged + tagged, required: acc.required + required };
+    },
+    { tagged: 0, required: 0 }
+  );
+
   return (
     <div className="absolute inset-0 pointer-events-none select-none">
-      {/* Corner brackets */}
       <svg className="absolute inset-0 w-full h-full" aria-hidden>
         <defs>
           <linearGradient id="hud-corner" x1="0" x2="1">
@@ -1672,14 +1799,12 @@ function ViewportHUD({
             <stop offset="100%" stopColor="var(--hud-teal)" />
           </linearGradient>
         </defs>
-        {/* TL */}
         <polyline
           points="16,40 16,16 40,16"
           stroke="url(#hud-corner)"
           strokeWidth="1"
           fill="none"
         />
-        {/* TR */}
         <polyline
           points="calc(100% - 40) 16, calc(100% - 16) 16, calc(100% - 16) 40"
           stroke="url(#hud-corner)"
@@ -1694,7 +1819,6 @@ function ViewportHUD({
         <div className="w-2 h-2 bg-[var(--hud-teal-bright)] shadow-[0_0_6px_var(--hud-teal-bright)] opacity-30" />
       </div>
 
-      {/* Top-left mode readout */}
       <div className="absolute top-3 left-10 flex items-center gap-3 bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line-strong)] px-3 py-1.5 pointer-events-none">
         <div className="flex flex-col leading-none">
           <span className="text-[8.5px] font-mono text-[var(--hud-text-faint)] tracking-wider">
@@ -1711,7 +1835,6 @@ function ViewportHUD({
         )}
       </div>
 
-      {/* Top-right readout */}
       <div className="absolute top-3 right-3 flex flex-col items-end gap-2 pointer-events-none">
         <div className="bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line)] px-3 py-1.5 flex items-center gap-3">
           <div className="flex flex-col leading-none items-end">
@@ -1723,28 +1846,24 @@ function ViewportHUD({
             </span>
           </div>
         </div>
-        {generatedParams && step === 3 && (
+        {generatedGlobalParams && generatedFeatureStates && step === 3 && (
           <GeneratedInfo
-            params={generatedParams}
+            globalParams={generatedGlobalParams}
+            featureStates={generatedFeatureStates}
             fileName={generatedFileName}
           />
         )}
       </div>
 
-      {/* Center reticle — shown while tagging */}
-      {step === 1.5 && activeFeatureIndex !== null && (
-        <CenterReticle />
-      )}
+      {step === 1.5 && activeTag && <CenterReticle />}
 
-      {/* Bottom-left terminal echo */}
       <div className="absolute bottom-3 left-3 flex flex-col gap-0.5 max-w-[46%] pointer-events-none">
         <TerminalLine tone="accent" stamp="[SYS]">
           {modeLabel.toLowerCase()}
         </TerminalLine>
         {step === 1.5 && (
           <TerminalLine tone="default" stamp="[TGT]">
-            {featurePoints.filter((f) => f.coords).length}/
-            {featurePoints.length} anchors locked
+            {tagged}/{required} anchors locked
           </TerminalLine>
         )}
         {step === 3 && (
@@ -1754,7 +1873,6 @@ function ViewportHUD({
         )}
       </div>
 
-      {/* Bottom-right axis compass */}
       <AxisCompass />
     </div>
   );
@@ -1826,7 +1944,6 @@ function AxisCompass() {
     <div className="absolute bottom-3 right-3 pointer-events-none">
       <div className="bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line)] p-2 flex flex-col items-center gap-1">
         <svg width="60" height="60" viewBox="0 0 60 60">
-          {/* grid background */}
           <rect
             x="5"
             y="5"
@@ -1837,7 +1954,6 @@ function AxisCompass() {
             strokeWidth="0.4"
             strokeDasharray="1 2"
           />
-          {/* X (red-teal) */}
           <line
             x1="30"
             y1="30"
@@ -1855,7 +1971,6 @@ function AxisCompass() {
           >
             X
           </text>
-          {/* Y (amber) */}
           <line
             x1="30"
             y1="30"
@@ -1873,7 +1988,6 @@ function AxisCompass() {
           >
             Y
           </text>
-          {/* Z (teal) */}
           <line
             x1="30"
             y1="30"
@@ -1902,30 +2016,30 @@ function AxisCompass() {
 }
 
 function GeneratedInfo({
-  params,
+  globalParams,
+  featureStates,
   fileName,
 }: {
-  params: Params;
+  globalParams: GlobalParams;
+  featureStates: FeatureStates;
   fileName: string | null;
 }) {
   const rows: [string, string, "default" | "accent"][] = [
-    ["VOXEL δ", `${params.voxelPitch}mm`, "default"],
-    ["SMOOTH σ", `${params.smoothSigma}`, "default"],
-    ["FACES", params.plugDecimTarget.toLocaleString(), "default"],
-    ["MIRROR", params.mirror ? "ON" : "OFF", params.mirror ? "accent" : "default"],
-    ["ROTATE Z", `${params.rotateZDeg}°`, "default"],
+    ["VOXEL δ", `${globalParams.voxelPitch}mm`, "default"],
+    ["SMOOTH σ", `${globalParams.smoothSigma}`, "default"],
+    ["FACES", globalParams.plugDecimTarget.toLocaleString(), "default"],
+    [
+      "MIRROR",
+      globalParams.mirror ? "ON" : "OFF",
+      globalParams.mirror ? "accent" : "default",
+    ],
+    ["ROTATE Z", `${globalParams.rotateZDeg}°`, "default"],
   ];
-  const retRows: [string, string][] = params.retention
-    ? [
-        ["Δx", `${params.retentionFrontOffset}mm`],
-        ["L", `${params.retentionLength}mm`],
-        ["W", `${params.retentionWidthY}mm`],
-        ["D", `${params.retentionDepthZ}mm`],
-        ["θ", `${params.retentionRotateDeg}°`],
-        ["r", `${params.retentionCornerRadius}mm`],
-        ["SIDES", params.retentionOneSide ? "+Z" : "BOTH"],
-      ]
-    : [];
+
+  const activeFeatures = publishedFeatures().filter(
+    (d) => featureStates[d.id]?.enabled
+  );
+
   return (
     <div className="bg-[var(--hud-void)]/75 backdrop-blur-sm border border-[var(--hud-line)] p-2.5 max-w-[260px] select-text pointer-events-auto">
       <div className="flex items-center gap-1.5 mb-1.5 pb-1.5 border-b border-[var(--hud-line)]">
@@ -1955,26 +2069,49 @@ function GeneratedInfo({
           </div>
         ))}
       </div>
-      {params.retention && (
-        <>
-          <div className="mt-2 pt-1.5 border-t border-[var(--hud-line)] flex items-center gap-1.5">
-            <LED state="on" />
-            <span className="font-display text-[9.5px] uppercase tracking-wider text-[var(--hud-amber-bright)]">
-              Retention Active
-            </span>
+      {activeFeatures.map((def) => {
+        const state = featureStates[def.id];
+        return (
+          <div
+            key={def.id}
+            className="mt-2 pt-1.5 border-t border-[var(--hud-line)]"
+          >
+            <div className="flex items-center gap-1.5">
+              <LED state="on" />
+              <span
+                className="font-display text-[9.5px] uppercase tracking-wider"
+                style={{ color: def.color }}
+              >
+                {def.label}
+              </span>
+            </div>
+            <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] font-mono mt-1">
+              {def.params.slice(0, 6).map((p) => {
+                const v = state.values[p.id] ?? ("default" in p ? p.default : "");
+                const label = p.code ?? p.label;
+                let display: string;
+                if (p.type === "number") {
+                  display = `${v}${p.unit ? p.unit : ""}`;
+                } else if (p.type === "toggle") {
+                  display = v ? "ON" : "OFF";
+                } else {
+                  display = String(v);
+                }
+                return (
+                  <div key={p.id} className="contents">
+                    <span className="text-[var(--hud-text-faint)]">
+                      {label}
+                    </span>
+                    <span className="text-[var(--hud-text-dim)] text-right tabular-nums">
+                      {display}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-          <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] font-mono mt-1">
-            {retRows.map(([k, v]) => (
-              <div key={k} className="contents">
-                <span className="text-[var(--hud-text-faint)]">{k}</span>
-                <span className="text-[var(--hud-text-dim)] text-right tabular-nums">
-                  {v}
-                </span>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
+        );
+      })}
     </div>
   );
 }

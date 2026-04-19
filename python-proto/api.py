@@ -122,24 +122,9 @@ async def process(
     plug_decim_target: int = Form(60_000),
     gun_decim_target: int = Form(60_000),
     smooth_iter: int = Form(0),
-    retention: bool = Form(True),
-    retention_front_offset: float = Form(4.0),
-    retention_length: float = Form(16.0),
-    retention_width_y: float = Form(14.0),
-    retention_depth_z: float = Form(4.0),
-    retention_y_offset: float = Form(0.0),
-    retention_rotate_deg: float = Form(0.0),
-    retention_corner_radius: float = Form(0.0),
-    retention_one_side: bool = Form(False),
     mirror: bool = Form(False),
     rotate_z_deg: float = Form(0.0),
-    # Slide Release
-    sr_enabled: bool = Form(True),
-    sr_width_y: float = Form(12.0),
-    sr_depth_z: float = Form(6.0),
-    sr_y_offset: float = Form(0.0),
-    sr_chamfer: float = Form(0.0),
-    feature_points: str | None = Form(None),
+    features_state: str = Form(...),
 ) -> dict:
     if not file.filename or not file.filename.lower().endswith(".stl"):
         raise HTTPException(status_code=400, detail="upload must be a .stl file")
@@ -154,6 +139,9 @@ async def process(
     with input_path.open("wb") as f:
         shutil.copyfileobj(file.file, f)
 
+    features_path = job_dir / "features_state.json"
+    features_path.write_text(features_state)
+
     cmd: list[str] = [
         sys.executable, str(HERE / "prototype_v11_mabr.py"),
         "--input", str(input_path),
@@ -164,32 +152,10 @@ async def process(
         "--smooth-sigma", str(smooth_sigma),
         "--smooth-iter", str(smooth_iter),
         "--rotate-z-deg", str(rotate_z_deg),
-        "--retention-front-offset", str(retention_front_offset),
-        "--retention-length", str(retention_length),
-        "--retention-width-y", str(retention_width_y),
-        "--retention-depth-z", str(retention_depth_z),
-        "--retention-y-offset", str(retention_y_offset),
-        "--retention-rotate-deg", str(retention_rotate_deg),
-        "--retention-corner-radius", str(retention_corner_radius),
-        # Pass SR params
-        "--sr-width-y", str(sr_width_y),
-        "--sr-depth-z", str(sr_depth_z),
-        "--sr-y-offset", str(sr_y_offset),
-        "--sr-chamfer", str(sr_chamfer),
+        "--features-state", str(features_path),
     ]
     if mirror:
         cmd.append("--mirror")
-    if retention:
-        cmd.append("--retention")
-    if retention_one_side:
-        cmd.append("--retention-one-side")
-    if sr_enabled:
-        cmd.append("--sr-enabled")
-    
-    if feature_points:
-        features_path = job_dir / "features.json"
-        features_path.write_text(feature_points)
-        cmd.extend(["--feature-points", str(features_path)])
 
     _run(cmd)
 

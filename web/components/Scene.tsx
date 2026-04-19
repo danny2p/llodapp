@@ -2,7 +2,6 @@
 
 import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
 import {
-  Line,
   OrbitControls,
   MapControls,
   PerspectiveCamera,
@@ -12,6 +11,11 @@ import {
 import { Suspense, useMemo, useRef, useEffect, useState } from "react";
 import * as THREE from "three";
 import { STLLoader } from "three-stdlib";
+import {
+  FEATURES,
+  type FeatureStates,
+} from "@/lib/features";
+import { flfFromPoints, type Vec3 } from "@/lib/featuresFrame";
 
 export type Step = 1 | 1.5 | 2 | 3;
 export type ViewMode = "unified" | "left" | "right";
@@ -39,185 +43,38 @@ export type SceneAssets = {
   rightUrl: string;
 };
 
-export type FeaturePoint = {
-  name: string;
-  label: string;
-  color: string;
-  coords: [number, number, number] | null;
-};
+export type ActiveTag = { featureId: string; pointIndex: number } | null;
 
 type SceneProps = {
   step: Step;
   viewMode: ViewMode;
   assets: SceneAssets | null;
   alignedGunUrl?: string | null;
-  featurePoints: FeaturePoint[];
-  activeFeatureIndex: number | null;
-  onTagFeature: (index: number, coords: [number, number, number]) => void;
+  featureStates: FeatureStates;
+  activeTag: ActiveTag;
+  onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
   placedAccessories: PlacedAccessory[];
   activeAccessoryId: string | null;
   onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSetActiveAccessory: (id: string | null) => void;
-  params?: any; // To pass dimensions for overlays
 };
 
-function FeatureOverlays({
-  featurePoints,
-  params,
-}: {
-  featurePoints: FeaturePoint[];
-  params: any;
-}) {
-  const tgPoint = featurePoints.find((f) => f.name === "tg_front")?.coords;
-  const srPoint = featurePoints.find((f) => f.name === "slide_release")?.coords;
+// Feature overlays — iterate the registry and render each feature's own
+// Overlay component (defined in `web/features/<id>/overlay.tsx`).
+// Marker-only features omit Overlay and render nothing here.
 
+function FeatureOverlays({ featureStates }: { featureStates: FeatureStates }) {
   return (
     <group>
-      {/* 
-          COORDINATE SYSTEM REFERENCE:
-          - X Axis: Length of gun.
-          - Negative X (-X): Toward Muzzle (closed end of holster).
-          - Positive X (+X): Toward Grip / Entrance (where gun exits).
-          
-          CLEARANCE CHANNEL DIRECTION: 
-          Must extend toward the ENTRANCE (+X) so the feature can slide out.
-      */}
-      {/* Trigger Retention Overlay */}
-      {tgPoint && params.retention && (
-        <group
-          position={[
-            tgPoint[0] + params.retentionFrontOffset,
-            tgPoint[1] + params.retentionYOffset,
-            tgPoint[2],
-          ]}
-          rotation={[0, 0, (params.retentionRotateDeg * Math.PI) / 180]}
-        >
-          {(() => {
-            const l = params.retentionLength;
-            const w = params.retentionWidthY;
-            const d = params.retentionDepthZ;
-            const r = Math.min(params.retentionCornerRadius, w * 0.45, l * 0.45);
-
-            const shape = new THREE.Shape();
-            if (r <= 0) {
-              shape.moveTo(0, -w / 2);
-              shape.lineTo(0, w / 2);
-              shape.lineTo(l, 0);
-              shape.closePath();
-            } else {
-              const alpha = Math.atan2(w / 2, l);
-              const cosA = Math.cos(alpha);
-              const sinA = Math.sin(alpha);
-              const dc = r / sinA;
-
-              shape.moveTo(0, -w / 2 + r);
-              shape.lineTo(0, w / 2 - r);
-              shape.absarc(r, w / 2 - r, r, Math.PI, Math.PI / 2 + alpha, true);
-              shape.lineTo(l - dc * cosA + r * sinA, r * cosA);
-              shape.absarc(l - dc * cosA, 0, r, alpha, -alpha, true);
-              shape.lineTo(r * sinA, -w / 2 + r * (1 - cosA));
-              shape.absarc(r, -w / 2 + r, r, -Math.PI / 2 - alpha, -Math.PI, true);
-            }
-
-            const points = shape.getPoints(24);
-            const geometry = new THREE.BufferGeometry();
-            const vertices: number[] = [];
-            const indices: number[] = [];
-            points.forEach((p) => {
-              const f = Math.max(0, 1 - p.x / l);
-              vertices.push(p.x, p.y, d * f);
-              vertices.push(p.x, p.y, -d * f);
-              vertices.push(p.x, p.y, 0);
-            });
-            const n = points.length;
-            for (let i = 0; i < n - 1; i++) {
-              indices.push(i * 3, (i + 1) * 3, i * 3 + 2);
-              indices.push((i + 1) * 3, (i + 1) * 3 + 2, i * 3 + 2);
-              if (!params.retentionOneSide) {
-                indices.push(i * 3 + 1, (i + 1) * 3 + 1, i * 3 + 2);
-                indices.push((i + 1) * 3 + 1, (i + 1) * 3 + 2, i * 3 + 2);
-              }
-            }
-            geometry.setAttribute(
-              "position",
-              new THREE.BufferAttribute(new Float32Array(vertices), 3)
-            );
-            geometry.setIndex(indices);
-
-            return (
-              <mesh geometry={geometry}>
-                <meshBasicMaterial
-                  color="#fbbf24"
-                  transparent
-                  opacity={0.3}
-                  wireframe
-                />
-              </mesh>
-            );
-          })()}
-        </group>
-      )}
-
-      {/* Slide Release Channel Overlay */}
-      {srPoint && params.srEnabled && (
-        <group
-          position={[
-            srPoint[0], 
-            srPoint[1] + params.srYOffset,
-            srPoint[2],
-          ]}
-        >
-          {(() => {
-            const channelLength = 200; 
-            const w = params.srWidthY;
-            const d = params.srDepthZ;
-            const c = params.srChamfer;
-            const isPos = srPoint[2] > 0;
-            const zSign = isPos ? 1 : -1;
-            const geometry = new THREE.BufferGeometry();
-            
-            const profile = [
-              {y: -w/2, z: 0}, {y: w/2, z: 0},
-              {y: w/2, z: Math.max(0, d - c) * zSign},
-              {y: Math.max(0, w/2 - c), z: d * zSign},
-              {y: -Math.max(0, w/2 - c), z: d * zSign},
-              {y: -w/2, z: Math.max(0, d - c) * zSign},
-            ];
-
-            const vertices: number[] = [];
-            // Slice 0: BUTTON face (X=0)
-            profile.forEach(p => {
-              let py = p.y; let pz = p.z;
-              if (c > 0 && pz !== 0) {
-                const ySign = Math.sign(py);
-                py = (Math.abs(py) > c) ? (Math.abs(py) - c) * ySign : 0;
-                pz = (Math.abs(pz) > c) ? (Math.abs(pz) - c) * zSign : 0;
-              }
-              vertices.push(0, py, pz);
-            });
-            // Slice 1: CHAMFER transition (X = +c) - Toward muzzle/grip?
-            // Direction is +X in world space for holster entrance (rear of gun).
-            vertices.push(...profile.flatMap(p => [c, p.y, p.z]));
-            vertices.push(...profile.flatMap(p => [channelLength, p.y, p.z]));
-
-            const indices = [
-              0, 2, 1, 0, 3, 2, 0, 4, 3, 0, 5, 4,
-              0, 6, 7, 0, 7, 1, 1, 7, 8, 1, 8, 2, 2, 8, 9, 2, 9, 3, 3, 9, 10, 3, 10, 4, 4, 10, 11, 4, 11, 5, 5, 11, 6, 5, 6, 0,
-              6, 12, 13, 6, 13, 7, 7, 13, 14, 7, 14, 8, 8, 14, 15, 8, 15, 9, 9, 15, 16, 9, 16, 10, 10, 16, 17, 10, 17, 11, 11, 17, 12, 11, 12, 6,
-              12, 13, 14, 12, 14, 15, 12, 15, 16, 12, 16, 17
-            ];
-
-            geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(vertices), 3));
-            geometry.setIndex(indices);
-            geometry.computeVertexNormals();
-            return (
-              <mesh geometry={geometry}>
-                <meshBasicMaterial color="#60a5fa" transparent opacity={0.3} wireframe />
-              </mesh>
-            );
-          })()}
-        </group>
-      )}
+      {FEATURES.filter((def) => def.published).map((def) => {
+        if (!def.Overlay) return null;
+        const state = featureStates[def.id];
+        if (!state?.enabled) return null;
+        const flf = flfFromPoints(state.points);
+        if (!flf) return null;
+        const Overlay = def.Overlay;
+        return <Overlay key={def.id} def={def} state={state} flf={flf} />;
+      })}
     </group>
   );
 }
@@ -236,12 +93,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://127.0.0.1:8000";
 
 function PickingGun({
   url,
-  activeFeatureIndex,
-  onTagFeature,
+  activeTag,
+  onTagPoint,
 }: {
   url: string;
-  activeFeatureIndex: number | null;
-  onTagFeature: (index: number, coords: [number, number, number]) => void;
+  activeTag: ActiveTag;
+  onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
 }) {
   const geometry = useLoader(STLLoader, url);
   const mesh = useMemo(() => {
@@ -254,10 +111,10 @@ function PickingGun({
     <mesh
       geometry={mesh}
       onPointerDown={(e) => {
-        if (activeFeatureIndex !== null) {
+        if (activeTag) {
           e.stopPropagation();
           const p = e.point;
-          onTagFeature(activeFeatureIndex, [p.x, p.y, p.z]);
+          onTagPoint(activeTag.featureId, activeTag.pointIndex, [p.x, p.y, p.z]);
         }
       }}
     >
@@ -353,7 +210,6 @@ function Accessory({
   data,
   isActive,
   onSelect,
-  onUpdate,
 }: {
   data: PlacedAccessory;
   isActive: boolean;
@@ -389,11 +245,11 @@ function Accessory({
       }}
     >
       <meshStandardMaterial
-        color={isActive ? "#10b981" : hovered ? "#34d399" : "#6366f1"}
-        metalness={0.6}
-        roughness={0.2}
+        color={isActive ? "#5EEAD4" : hovered ? "#34D399" : "#2DD4BF"}
+        metalness={0.55}
+        roughness={0.25}
         emissive={isActive ? "#064e3b" : "#000000"}
-        emissiveIntensity={isActive ? 0.5 : 0}
+        emissiveIntensity={isActive ? 0.4 : 0}
       />
     </mesh>
   );
@@ -431,17 +287,19 @@ function Plug({
   const plugMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: "#1a2b45",
-        metalness: 0.3,
-        roughness: 0.4,
+        color: "#0B1828",
+        metalness: 0.45,
+        roughness: 0.35,
         clippingPlanes: [plugClipPlane],
+        emissive: "#062029",
+        emissiveIntensity: 0.35,
       }),
     [plugClipPlane]
   );
   const gunMaterial = useMemo(
     () =>
       new THREE.MeshStandardMaterial({
-        color: "#6e7480",
+        color: "#6E7480",
         metalness: 0.55,
         roughness: 0.35,
         transparent: true,
@@ -452,14 +310,14 @@ function Plug({
   const halfMaterial = useMemo(
     () =>
       new THREE.MeshPhysicalMaterial({
-        color: "#f2f6fa",
+        color: "#D6E5EE",
         metalness: 0.2,
         roughness: 0.35,
         clearcoat: 1.0,
         clearcoatRoughness: 0.08,
         sheen: 0.5,
-        sheenColor: new THREE.Color("#dbe7f2"),
-        sheenRoughness: 0.25,
+        sheenColor: new THREE.Color("#5EEAD4"),
+        sheenRoughness: 0.3,
         side: THREE.DoubleSide,
         flatShading: true,
         polygonOffset: true,
@@ -498,7 +356,8 @@ function Plug({
       const muzzleWorldX = gunX + plug.gunLeadingX;
       plugClipPlane.constant = muzzleWorldX;
       const fadeStart = 0.75;
-      gunMaterial.opacity = t < fadeStart ? 1 : Math.max(0, 1 - (t - fadeStart) / (1 - fadeStart));
+      gunMaterial.opacity =
+        t < fadeStart ? 1 : Math.max(0, 1 - (t - fadeStart) / (1 - fadeStart));
     }
 
     if (step === 3) {
@@ -517,13 +376,11 @@ function Plug({
       } else if (viewMode === "left") {
         if (leftGroupRef.current) {
           leftGroupRef.current.position.set(0, 0, 0);
-          // Left half detail is at -Z. Rotate +90 around X to face UP (+Y).
           leftGroupRef.current.rotation.x = THREE.MathUtils.lerp(0, Math.PI / 2, t);
         }
       } else if (viewMode === "right") {
         if (rightGroupRef.current) {
           rightGroupRef.current.position.set(0, 0, 0);
-          // Right half detail is at +Z. Rotate -90 around X to face UP (+Y).
           rightGroupRef.current.rotation.x = THREE.MathUtils.lerp(0, -Math.PI / 2, t);
         }
       }
@@ -534,7 +391,7 @@ function Plug({
     <group>
       <mesh ref={plugMeshRef} geometry={plug.full} material={plugMaterial} castShadow receiveShadow />
       <mesh ref={gunRef} geometry={plug.gun} material={gunMaterial} castShadow />
-      
+
       <group ref={leftGroupRef}>
         <mesh geometry={plug.left} material={halfMaterial} castShadow receiveShadow />
         {accessories
@@ -579,27 +436,24 @@ function ClayBlock({
   useFrame((_, delta) => {
     if (!ref.current) return;
     const mat = ref.current.material as THREE.MeshStandardMaterial;
-    // Reduced target opacity for better internal visibility
     const target = visible ? 0.35 : 0;
     mat.opacity = THREE.MathUtils.lerp(mat.opacity, target, delta * 3);
     ref.current.visible = mat.opacity > 0.01;
   });
-  // Use exact sizeHint.x to ensure mold ends are flush with block faces.
-  // We keep a small buffer in Y and Z for visual clarity of the carving.
   const w = sizeHint.x;
   const h = sizeHint.y * 1.4;
   const d = sizeHint.z * 2.2;
   return (
     <mesh ref={ref} position={[0, 0, 0]}>
       <boxGeometry args={[w, h, d]} />
-      {/* Lighter color and slight emissive to make it pop against the void background */}
       <meshStandardMaterial
-        color="#e5e0d8"
+        color="#0E2333"
         transparent
         opacity={0}
-        roughness={0.8}
-        metalness={0.1}
-        emissive="#1a1a1a"
+        roughness={0.7}
+        metalness={0.15}
+        emissive="#052230"
+        emissiveIntensity={0.5}
       />
     </mesh>
   );
@@ -609,12 +463,15 @@ function easeOutCubic(x: number) {
   return 1 - Math.pow(1 - x, 3);
 }
 
+// HUD-style marker pulsing at a tagged feature point.
 function FeatureMarker({
   coords,
   color,
+  active,
 }: {
   coords: [number, number, number];
   color: string;
+  active: boolean;
 }) {
   const ringRef = useRef<THREE.Mesh>(null);
   const pulseRef = useRef<THREE.Mesh>(null);
@@ -642,7 +499,7 @@ function FeatureMarker({
       </mesh>
       <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
         <ringGeometry args={[3.2, 3.7, 32]} />
-        <meshBasicMaterial color={color} transparent opacity={0.85} side={THREE.DoubleSide} />
+        <meshBasicMaterial color={color} transparent opacity={active ? 1 : 0.85} side={THREE.DoubleSide} />
       </mesh>
       <mesh rotation={[0, 0, 0]}>
         <ringGeometry args={[5.2, 5.35, 48, 1, 0, Math.PI / 3]} />
@@ -670,8 +527,9 @@ function CameraController({ isFlat }: { isFlat: boolean }) {
         camera.lookAt(0, 0, 0);
       }
       if (controls) {
-        (controls as any).target.set(0, 0, 0);
-        (controls as any).update();
+        const c = controls as unknown as { target: THREE.Vector3; update: () => void };
+        c.target.set(0, 0, 0);
+        c.update();
       }
       lastIsFlat.current = isFlat;
     }
@@ -686,40 +544,68 @@ function LoadedScene(props: SceneProps) {
     viewMode,
     assets,
     alignedGunUrl,
-    featurePoints,
-    activeFeatureIndex,
-    onTagFeature,
+    featureStates,
+    activeTag,
+    onTagPoint,
     placedAccessories,
     activeAccessoryId,
     onUpdateAccessory,
     onSetActiveAccessory,
-    params,
   } = props;
+
+  // Collect all tagged points across published+enabled features for marker rendering.
+  const markers = useMemo(() => {
+    const out: Array<{
+      key: string;
+      coords: [number, number, number];
+      color: string;
+      active: boolean;
+    }> = [];
+    for (const def of FEATURES) {
+      if (!def.published) continue;
+      const state = featureStates[def.id];
+      if (!state?.enabled) continue;
+      state.points.forEach((pt, i) => {
+        if (!pt) return;
+        out.push({
+          key: `${def.id}.${i}`,
+          coords: pt,
+          color: def.color,
+          active:
+            activeTag?.featureId === def.id && activeTag.pointIndex === i,
+        });
+      });
+    }
+    return out;
+  }, [featureStates, activeTag]);
 
   return (
     <>
       {step === 1.5 && alignedGunUrl && (
         <>
-          <PickingGun url={alignedGunUrl} activeFeatureIndex={activeFeatureIndex} onTagFeature={onTagFeature} />
-          {params && <FeatureOverlays featurePoints={featurePoints} params={params} />}
+          <PickingGun
+            url={alignedGunUrl}
+            activeTag={activeTag}
+            onTagPoint={onTagPoint}
+          />
+          <FeatureOverlays featureStates={featureStates} />
         </>
       )}
 
       {step === 1.5 &&
-        featurePoints.map(
-          (fp) =>
-            fp.coords && <FeatureMarker key={fp.name} coords={fp.coords} color={fp.color} />
-        )}
+        markers.map((m) => (
+          <FeatureMarker key={m.key} coords={m.coords} color={m.color} active={m.active} />
+        ))}
 
       {assets && (
         <MoldAssets
           assets={assets}
           step={step}
           viewMode={viewMode}
-          placedAccessories={props.placedAccessories}
-          activeAccessoryId={props.activeAccessoryId}
+          placedAccessories={placedAccessories}
+          activeAccessoryId={activeAccessoryId}
           onUpdateAccessory={onUpdateAccessory}
-          onSetActiveAccessory={props.onSetActiveAccessory}
+          onSetActiveAccessory={onSetActiveAccessory}
         />
       )}
     </>
