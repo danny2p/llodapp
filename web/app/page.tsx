@@ -1176,6 +1176,11 @@ function FeatureTagCard({
                       active ? "text-[var(--hud-teal-bright)]" : "text-[var(--hud-text)]"
                     }`}>
                       {isPrimary ? def.label : slot.label}
+                      {isPrimary && def.intent !== "marker" && (
+                        <span className="ml-2 text-[8.5px] lowercase font-mono text-[var(--hud-text-faint)] tracking-normal normal-case">
+                          ({def.intent})
+                        </span>
+                      )}
                     </span>
                     {!isPrimary && (
                       <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
