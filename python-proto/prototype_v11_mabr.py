@@ -412,67 +412,80 @@ def inject_triangular_retention_indent(cavity_bin: np.ndarray, origin: np.ndarra
     return cavity_f, origin
 
 
-def inject_slide_release_relief(cavity_bin: np.ndarray, origin: np.ndarray, pitch: float,
-                                sr_coords: np.ndarray, insertion_vox: int,
-                                width_y_mm: float, depth_z_mm: float,
-                                y_offset_mm: float, z_offset_mm: float,
-                                ) -> tuple[np.ndarray, np.ndarray]:
-    """Carve a rectangular relief channel for the slide release.
-    """
+def inject_slide_release_relief(cavity_bin, origin, pitch, sr_coords, insertion_vox, width_y_mm, depth_z_mm, y_offset_mm, chamfer_mm=0.0):
+    import numpy as np
     nx, ny, nz = cavity_bin.shape
-    cavity_f = cavity_bin.astype(np.float32)
-
-    # Convert mm params to voxels
-    half_w_vox = (width_y_mm / 2.0) / pitch
-    depth_vox = depth_z_mm / pitch
+    cavity_f = cavity_bin.astype("float32")
     
-    # Tagged point in voxel coords
-    # Note: We must apply the (insertion_vox - 1 - ...) flip because the cavity
-    # grid is swept, reversing the X axis relative to the aligned gun.
-    i_start = int((insertion_vox - 1) - np.round((sr_coords[0] - origin[0]) / pitch))
-    j_c = int(np.round((sr_coords[1] + y_offset_mm - origin[1]) / pitch))
-    k_c = int(np.round((sr_coords[2] - origin[2]) / pitch))
+    # 1. Coordinate Math
+    # !!! CRITICAL AI / DEVELOPER NOTE !!!
+    # WORLD SPACE: Muzzle is -X, Grip/Entrance is +X.
+    # VOXEL SPACE: Grid is SWEPT, reversing X. Index 0 is the ENTRANCE (Grip).
+    # i_start is the button position. Carving from 0 to i_start creates 
+    # the clearance path toward the holster opening (the grip).
+    # Entrance is index 0, Button is i_start. Aligned gun has muzzle at min X.
+    i_start = int((insertion_vox - 1) - round((sr_coords[0] - origin[0]) / pitch))
+    j_c = int(round((sr_coords[1] + y_offset_mm - origin[1]) / pitch))
+    k_tag = int(round((sr_coords[2] - origin[2]) / pitch))
 
-    # Determine which side of the mold we are on based on the tagged Z
+    # 2. Side detection (Positive or Negative Z relative to gun center)
     col_sample = cavity_bin[max(0, min(i_start, nx-1)), max(0, min(j_c, ny-1)), :]
     if col_sample.any():
         zs = np.where(col_sample)[0]
         z_mid = (zs.min() + zs.max()) / 2.0
-        is_positive_side = k_c > z_mid
+        is_positive_side = k_tag > z_mid
     else:
-        is_positive_side = k_c > (nz / 2.0)
+        is_positive_side = k_tag > (nz / 2.0)
 
-    # Bounds for the rectangle
-    j0 = max(0, int(np.floor(j_c - half_w_vox)))
-    j1 = min(ny - 1, int(np.ceil(j_c + half_w_vox)))
+    # 3. Geometric Constants
+    half_w_mm = width_y_mm / 2.0
+    j0 = max(0, int(np.floor(j_c - (half_w_mm / pitch))))
+    j1 = min(ny - 1, int(np.ceil(j_c + (half_w_mm / pitch))))
     
-    # Carve from the holster entrance (i=0) to the tagged point (i_start)
+    # 4. Carving Loop
     for i in range(0, i_start + 1):
+        # Distance to leading edge (the button end)
+        x_dist_mm = (i_start - i) * pitch
+        
         for j in range(j0, j1 + 1):
-            col = cavity_bin[i, j, :]
-            if not col.any():
-                continue
-            zs = np.where(col)[0]
-            z_max = int(zs.max())
-            z_min = int(zs.min())
+            # Distance to longitudinal side edges
+            y_dist_mm = half_w_mm - abs(j - j_c) * pitch
             
-            if is_positive_side:
-                # Add material OUTWARD (+Z direction)
-                z_off_vox = z_offset_mm / pitch
-                k_start = z_max
-                k_end = min(nz - 1, int(np.ceil(z_max + depth_vox + z_off_vox)))
-                for k in range(k_start, k_end + 1):
-                    cavity_f[i, j, k] = 1.0 
-            else:
-                # Add material OUTWARD (-Z direction)
-                z_off_vox = z_offset_mm / pitch
-                k_start = z_min
-                k_end = max(0, int(np.floor(z_min - depth_vox - z_off_vox)))
-                for k in range(k_end, k_start + 1):
-                    cavity_f[i, j, k] = 1.0
+            # 3D Chamfer Logic: The "allowed depth" is reduced near any edge
+            # min_dist is distance to nearest edge in XY plane
+            min_dist_edge = min(max(0, x_dist_mm), max(0, y_dist_mm))
+            
+            current_max_depth = depth_z_mm
+            if chamfer_mm > 0:
+                if min_dist_edge < chamfer_mm:
+                    # Linear ramp: at edge (dist=0) depth is (depth - chamfer)
+                    # at dist=chamfer, depth is full.
+                    current_max_depth = depth_z_mm - (chamfer_mm - min_dist_edge)
+            
+            if current_max_depth <= 0:
+                continue
+
+            col = cavity_bin[i, j, :]
+            if not col.any(): continue
+            zs = np.where(col)[0]
+            z_surf = int(zs.max()) if is_positive_side else int(zs.min())
+            
+            # Apply growth with sub-voxel precision via float densities
+            depth_vox = current_max_depth / pitch
+            
+            for v_off in range(int(np.ceil(depth_vox)) + 1):
+                density = 1.0
+                if v_off > depth_vox: continue
+                if v_off + 1 > depth_vox:
+                    density = depth_vox - v_off
+                
+                k = z_surf + v_off if is_positive_side else z_surf - v_off
+                if 0 <= k < nz:
+                    # Union operation: take max density
+                    if density > cavity_f[i, j, k]:
+                        cavity_f[i, j, k] = density
 
     return cavity_f, origin
-
 
 def cavity_to_mesh(cavity: np.ndarray, origin: np.ndarray, pitch: float,
                    smooth_sigma: float = 0.0) -> trimesh.Trimesh:
@@ -531,8 +544,8 @@ def main() -> None:
                         help="Depth of the slide release channel (mm).")
     parser.add_argument("--sr-y-offset", type=float, default=0.0,
                         help="Vertical offset for the slide release channel (mm).")
-    parser.add_argument("--sr-z-offset", type=float, default=0.0,
-                        help="Depth offset for the slide release channel (mm).")
+    parser.add_argument("--sr-chamfer", type=float, default=0.0,
+                        help="Chamfer distance (mm) for the corners of the slide release relief channel.")
     parser.add_argument("--out-dir", type=str, default=None,
                         help="Directory for output STLs (default: python-proto/out).")
     parser.add_argument("--decim-target", type=int, default=None,
@@ -607,6 +620,14 @@ def main() -> None:
 
     console.rule("Voxelize + sweep")
     occupancy, origin = voxelize_filled(aligned, args.voxel_pitch)
+    
+    # Pad the voxel grid in Z to provide headroom for carved relief channels
+    # We add 20mm of headroom (10mm each side) which is plenty for our 6-12mm reliefs.
+    pad_mm = 15.0
+    pad_vox = int(np.ceil(pad_mm / args.voxel_pitch))
+    occupancy = np.pad(occupancy, ((0, 0), (0, 0), (pad_vox, pad_vox)), mode="constant", constant_values=0)
+    origin[2] -= pad_vox * args.voxel_pitch
+    
     console.print(f"voxel grid: {occupancy.shape}, {int(occupancy.sum()):,} filled")
     insertion_vox = int(round(INSERTION_DEPTH_MM / args.voxel_pitch))
     cavity = sweep_cavity(occupancy, insertion_vox)
@@ -675,10 +696,10 @@ def main() -> None:
                 width_y_mm=args.sr_width_y,
                 depth_z_mm=args.sr_depth_z,
                 y_offset_mm=args.sr_y_offset,
-                z_offset_mm=args.sr_z_offset,
+                chamfer_mm=args.sr_chamfer,
             )
             console.print(f"SR relief: width {args.sr_width_y}mm, depth {args.sr_depth_z}mm, "
-                          f"y_offset {args.sr_y_offset:+.1f}mm, z_offset {args.sr_z_offset:+.1f}mm")
+                          f"y_offset {args.sr_y_offset:+.1f}mm")
 
     mesh = cavity_to_mesh(cavity, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma)
     if args.smooth_iter > 0:

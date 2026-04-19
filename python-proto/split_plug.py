@@ -17,20 +17,30 @@ from rich.console import Console
 
 def split_at_z0(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, trimesh.Trimesh]:
     mesh = mesh.copy()
+    # Ensure mesh is cleaned up before splitting
     mesh.merge_vertices()
+    mesh.remove_degenerate_faces()
+    mesh.remove_duplicate_faces()
+    
+    # Fill holes to make it watertight. Marching cubes should be watertight
+    # but decimation can sometimes leave pinholes.
     mesh.fill_holes()
+    
+    # Cap=True requires a closed manifold mesh to work reliably.
     right = trimesh.intersections.slice_mesh_plane(
         mesh, plane_normal=[0, 0, 1], plane_origin=[0, 0, 0], cap=True
     )
     left = trimesh.intersections.slice_mesh_plane(
         mesh, plane_normal=[0, 0, -1], plane_origin=[0, 0, 0], cap=True
     )
-    # Cap triangulation + slice can leave inconsistent face winding.
-    # fix_normals re-orients all faces outward; viewers (and our WebGL scene)
-    # rely on this for correct shading, even though print slicers don't.
+    
+    # Post-process halves to ensure normals are outward-facing and surfaces are closed
     for half in (left, right):
-        half.process()
+        half.merge_vertices()
+        half.remove_degenerate_faces()
         half.fix_normals()
+        half.fill_holes() # Fill any holes left by the slicer
+    
     return left, right
 
 

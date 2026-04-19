@@ -116,9 +116,9 @@ async def align(
 @app.post("/api/process")
 async def process(
     file: UploadFile,
-    voxel_pitch: float = Form(0.35),
+    voxel_pitch: float = Form(0.25),
     smooth_sigma: float = Form(0.8),
-    plug_decim_target: int = Form(30_000),
+    plug_decim_target: int = Form(60_000),
     gun_decim_target: int = Form(60_000),
     smooth_iter: int = Form(0),
     retention: bool = Form(True),
@@ -137,7 +137,7 @@ async def process(
     sr_width_y: float = Form(12.0),
     sr_depth_z: float = Form(6.0),
     sr_y_offset: float = Form(0.0),
-    sr_z_offset: float = Form(0.0),
+    sr_chamfer: float = Form(0.0),
     feature_points: str | None = Form(None),
 ) -> dict:
     if not file.filename or not file.filename.lower().endswith(".stl"):
@@ -174,7 +174,7 @@ async def process(
         "--sr-width-y", str(sr_width_y),
         "--sr-depth-z", str(sr_depth_z),
         "--sr-y-offset", str(sr_y_offset),
-        "--sr-z-offset", str(sr_z_offset),
+        "--sr-chamfer", str(sr_chamfer),
     ]
     if mirror:
         cmd.append("--mirror")

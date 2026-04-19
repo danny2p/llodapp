@@ -38,14 +38,14 @@ type Params = {
   srWidthY: number;
   srDepthZ: number;
   srYOffset: number;
-  srZOffset: number;
+  srChamfer: number;
 };
 
 const DEFAULT_PARAMS: Params = {
-  voxelPitch: 0.35,
+  voxelPitch: 0.25,
   smoothSigma: 0.8,
   smoothIter: 10,
-  plugDecimTarget: 30000,
+  plugDecimTarget: 60000,
   gunDecimTarget: 60000,
   mirror: false,
   rotateZDeg: 0,
@@ -63,7 +63,7 @@ const DEFAULT_PARAMS: Params = {
   srWidthY: 12,
   srDepthZ: 6,
   srYOffset: 0,
-  srZOffset: 0,
+  srChamfer: 2.0,
 };
 
 const CAMEL_TO_SNAKE = (s: string) =>
@@ -924,13 +924,14 @@ function ParamPanel({
           disabled={disabled || !params.srEnabled}
         />
         <Slider
-          label="Z Offset"
+          label="Chamfer"
           unit="mm"
-          value={params.srZOffset}
-          min={-10}
+          value={params.srChamfer}
+          min={0}
           max={10}
           step={0.5}
-          onChange={(v) => update("srZOffset", v)}
+          hint="45-degree cut on the outer corners of the relief channel"
+          onChange={(v) => update("srChamfer", v)}
           disabled={disabled || !params.srEnabled}
         />
       </Group>

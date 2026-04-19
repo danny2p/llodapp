@@ -65,6 +65,15 @@ function FeatureOverlays({
 
   return (
     <group>
+      {/* 
+          COORDINATE SYSTEM REFERENCE:
+          - X Axis: Length of gun.
+          - Negative X (-X): Toward Muzzle (closed end of holster).
+          - Positive X (+X): Toward Grip / Entrance (where gun exits).
+          
+          CLEARANCE CHANNEL DIRECTION: 
+          Must extend toward the ENTRANCE (+X) so the feature can slide out.
+      */}
       {/* Trigger Retention Overlay */}
       {tgPoint && params.retention && (
         <group
@@ -79,47 +88,15 @@ function FeatureOverlays({
             const l = params.retentionLength;
             const w = params.retentionWidthY;
             const d = params.retentionDepthZ;
-
-            // Create a custom BufferGeometry for the ramped triangle
-            // The "flat" side is at X=0, the "point" is at X=l
-            // Depth ramps from d at X=0 to 0 at X=l
             const geometry = new THREE.BufferGeometry();
             const vertices = new Float32Array([
-              // Top side (+Z)
-              0, -w / 2, 0, // Flat bottom
-              0, w / 2, 0,  // Flat top
-              0, 0, d,      // Flat peak
-              l, 0, 0,      // The point
-
-              // Bottom side (-Z)
-              0, -w / 2, 0,
-              0, w / 2, 0,
-              0, 0, -d,
-              l, 0, 0,
+              0, -w / 2, 0, 0, w / 2, 0, 0, 0, d, l, 0, 0,
+              0, -w / 2, 0, 0, w / 2, 0, 0, 0, -d, l, 0, 0,
             ]);
-
-            const indices = [
-              // +Z half
-              0, 2, 1, // Flat face
-              0, 3, 2, // Bottom slope
-              1, 2, 3, // Top slope
-              0, 1, 3, // Back face (base)
-            ];
-
-            if (!params.retentionOneSide) {
-              // Add -Z half
-              indices.push(
-                4, 5, 6, // Flat face
-                4, 6, 7, // Bottom slope
-                5, 7, 6, // Top slope
-                4, 7, 5  // Back face
-              );
-            }
-
+            const indices = [0, 2, 1, 0, 3, 2, 1, 2, 3, 0, 1, 3, 4, 5, 6, 4, 6, 7, 5, 7, 6, 4, 7, 5];
             geometry.setAttribute("position", new THREE.BufferAttribute(vertices, 3));
             geometry.setIndex(indices);
             geometry.computeVertexNormals();
-
             return (
               <mesh geometry={geometry}>
                 <meshBasicMaterial color="#fbbf24" transparent opacity={0.3} wireframe />
@@ -135,14 +112,54 @@ function FeatureOverlays({
           position={[
             srPoint[0], 
             srPoint[1] + params.srYOffset,
-            srPoint[2] + (srPoint[2] > 0 ? params.srZOffset : -params.srZOffset),
+            srPoint[2],
           ]}
         >
           {(() => {
-            const channelLength = 300; 
+            const channelLength = 200; 
+            const w = params.srWidthY;
+            const d = params.srDepthZ;
+            const c = params.srChamfer;
+            const isPos = srPoint[2] > 0;
+            const zSign = isPos ? 1 : -1;
+            const geometry = new THREE.BufferGeometry();
+            
+            const profile = [
+              {y: -w/2, z: 0}, {y: w/2, z: 0},
+              {y: w/2, z: Math.max(0, d - c) * zSign},
+              {y: Math.max(0, w/2 - c), z: d * zSign},
+              {y: -Math.max(0, w/2 - c), z: d * zSign},
+              {y: -w/2, z: Math.max(0, d - c) * zSign},
+            ];
+
+            const vertices: number[] = [];
+            // Slice 0: BUTTON face (X=0)
+            profile.forEach(p => {
+              let py = p.y; let pz = p.z;
+              if (c > 0 && pz !== 0) {
+                const ySign = Math.sign(py);
+                py = (Math.abs(py) > c) ? (Math.abs(py) - c) * ySign : 0;
+                pz = (Math.abs(pz) > c) ? (Math.abs(pz) - c) * zSign : 0;
+              }
+              vertices.push(0, py, pz);
+            });
+            // Slice 1: CHAMFER transition (X = +c) - Toward muzzle/grip?
+            // Direction is +X in world space for holster entrance (rear of gun).
+            vertices.push(...profile.flatMap(p => [c, p.y, p.z]));
+            vertices.push(...profile.flatMap(p => [channelLength, p.y, p.z]));
+
+            const indices = [
+              0, 2, 1, 0, 3, 2, 0, 4, 3, 0, 5, 4,
+              0, 6, 7, 0, 7, 1, 1, 7, 8, 1, 8, 2, 2, 8, 9, 2, 9, 3, 3, 9, 10, 3, 10, 4, 4, 10, 11, 4, 11, 5, 5, 11, 6, 5, 6, 0,
+              6, 12, 13, 6, 13, 7, 7, 13, 14, 7, 14, 8, 8, 14, 15, 8, 15, 9, 9, 15, 16, 9, 16, 10, 10, 16, 17, 10, 17, 11, 11, 17, 12, 11, 12, 6,
+              12, 13, 14, 12, 14, 15, 12, 15, 16, 12, 16, 17
+            ];
+
+            geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(vertices), 3));
+            geometry.setIndex(indices);
+            geometry.computeVertexNormals();
             return (
-              <mesh position={[channelLength / 2, 0, 0]}>
-                <boxGeometry args={[channelLength, params.srWidthY, params.srDepthZ]} />
+              <mesh geometry={geometry}>
                 <meshBasicMaterial color="#60a5fa" transparent opacity={0.3} wireframe />
               </mesh>
             );
@@ -236,9 +253,11 @@ function MoldAssets({
 
     const leftPrepared = left.clone();
     leftPrepared.translate(...shift);
+    leftPrepared.computeVertexNormals();
 
     const rightPrepared = right.clone();
     rightPrepared.translate(...shift);
+    rightPrepared.computeVertexNormals();
 
     const gunPrepared = gun.clone();
     gunPrepared.translate(...shift);
@@ -375,8 +394,13 @@ function Plug({
     () =>
       new THREE.MeshStandardMaterial({
         color: "#c9c2b4",
-        metalness: 0.15,
-        roughness: 0.55,
+        metalness: 0.1,
+        roughness: 0.7,
+        side: THREE.DoubleSide,
+        flatShading: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 1,
+        polygonOffsetUnits: 1,
       }),
     []
   );
