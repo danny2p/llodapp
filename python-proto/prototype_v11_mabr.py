@@ -170,15 +170,42 @@ def orient_muzzle_low(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     xs = mesh.vertices[:, 0]
     x_min, x_max = xs.min(), xs.max()
     span = x_max - x_min
+    # Look at the 'head' (muzzle) and 'tail' (grip/back)
     head = mesh.vertices[xs < x_min + 0.1 * span]
     tail = mesh.vertices[xs > x_max - 0.1 * span]
     head_area = (head[:, 1:].max(0) - head[:, 1:].min(0)).prod()
     tail_area = (tail[:, 1:].max(0) - tail[:, 1:].min(0)).prod()
     if head_area > tail_area:
+        # Flip X only to muzzle-low.
         v = mesh.vertices.copy()
         v[:, 0] = -v[:, 0]
+        # We must also flip Y or Z to maintain a right-handed system if we were doing a full rotation,
+        # but here we just want to ensure muzzle is at low X for the sweep.
+        # Actually, a 180-deg rotation around Y would flip both X and Z.
+        # Let's just flip X and then re-normalize Y to be safe.
+        return trimesh.Trimesh(vertices=v, faces=mesh.faces[:, ::-1], process=True)
+    return mesh
+
+
+def normalize_y_orientation(mesh: trimesh.Trimesh, console: Console | None = None) -> trimesh.Trimesh:
+    """Handguns have significantly more mass (the grip) below the slide.
+    After alignment, the slide is typically centered at Y=0.
+    We ensure the 'heavy' side is at -Y.
+    """
+    ys = mesh.vertices[:, 1]
+    y_center = (ys.min() + ys.max()) / 2.0
+    
+    above = (ys > y_center).sum()
+    below = (ys < y_center).sum()
+    
+    if above > below:
+        if console:
+            console.print("[yellow]Vertical flip detected: orienting grip down (-Y)[/yellow]")
+        v = mesh.vertices.copy()
         v[:, 1] = -v[:, 1]
-        return trimesh.Trimesh(vertices=v, faces=mesh.faces, process=False)
+        v[:, 2] = -v[:, 2]
+        faces = mesh.faces[:, ::-1] # Reverse winding to keep normals outward
+        return trimesh.Trimesh(vertices=v, faces=faces, process=True)
     return mesh
 
 
@@ -473,6 +500,7 @@ def main() -> None:
     console.rule("MABR in-plane rotation (X axis)")
     R, centroid = build_rotation(raw, z_axis, console)
     aligned = apply_rotation(raw, R, centroid)
+    aligned = normalize_y_orientation(aligned)
     console.print(f"aligned bbox: {aligned.bounds[1] - aligned.bounds[0]}")
 
     if args.rotate_z_deg != 0.0:
@@ -489,6 +517,7 @@ def main() -> None:
         aligned.merge_vertices()
 
     aligned = orient_muzzle_low(aligned)
+    aligned = normalize_y_orientation(aligned, console)
     console.print(f"after muzzle orient: bbox {aligned.bounds[1] - aligned.bounds[0]}")
 
     suffix = f"_rz{int(args.rotate_z_deg)}" if args.rotate_z_deg else ""
