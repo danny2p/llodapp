@@ -1,9 +1,10 @@
 # LLOD Mold Maker Rules
 
-## Coordinate System
+## Coordinate System (Viewer)
 - **X-Axis:** Length of the gun.
-- **Negative X (-X):** Muzzle side (the tip).
-- **Positive X (+X):** Grip / Holster Entrance side (where the gun exits).
+- **Positive X (+X):** Muzzle side (Right side of screen).
+- **Negative X (-X):** Grip / Holster Entrance side (Left side of screen).
+- **Animation:** Gun enters from Left (-X) and moves Right (+X), plunging into the mold.
 
 ## Feature Logic
 - **Slide Release Clearance:** Channels MUST extend from the tagged point toward the **holster entrance (+X)**.

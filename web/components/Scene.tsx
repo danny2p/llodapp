@@ -566,7 +566,9 @@ function ClayBlock({
     mat.opacity = THREE.MathUtils.lerp(mat.opacity, target, delta * 3);
     ref.current.visible = mat.opacity > 0.01;
   });
-  const w = sizeHint.x * 1.1;
+  // Use exact sizeHint.x to ensure mold ends are flush with block faces.
+  // We keep a small buffer in Y and Z for visual clarity of the carving.
+  const w = sizeHint.x;
   const h = sizeHint.y * 1.4;
   const d = sizeHint.z * 2.2;
   return (
