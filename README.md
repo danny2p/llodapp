@@ -1,4 +1,4 @@
-# LLOD Mold Maker
+# LLOD Holster Workshop
 
 A high-fidelity prototype for generating 3D-printable holster molds from firearm scan data.
 

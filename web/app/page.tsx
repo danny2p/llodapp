@@ -125,25 +125,25 @@ const STEP_META: Record<
 > = {
   1: {
     id: "01",
-    title: "ACQUIRE",
-    subtitle: "Ingest firearm scan",
+    title: "UPLOAD",
+    subtitle: "Ingest 3D Scan",
     icon: <Upload size={14} />,
   },
   1.5: {
     id: "02",
-    title: "TARGET",
+    title: "ALIGN",
     subtitle: "Tag feature anchors",
     icon: <Crosshair size={14} />,
   },
   2: {
     id: "03",
-    title: "FABRICATE",
+    title: "PROCESS",
     subtitle: "Sweep + voxelize",
     icon: <Cpu size={14} />,
   },
   3: {
     id: "04",
-    title: "EXTRACT",
+    title: "EXPORT",
     subtitle: "Split + export halves",
     icon: <Scissors size={14} />,
   },
@@ -580,7 +580,7 @@ function TopBar({
         <Logo />
         <div className="flex flex-col leading-tight">
           <span className="font-display text-[14px] font-bold tracking-[0.2em] text-[var(--hud-teal-bright)] hud-glow-teal">
-            FABRICATOR
+            HOLSTER WORKSHOP
           </span>
           <span className="font-mono text-[9px] tracking-[0.25em] text-[var(--hud-text-faint)]">
             LLOD · MOLD.SYS v0.4
@@ -603,16 +603,7 @@ function TopBar({
             </span>
           </div>
         )}
-        <div className="flex items-center gap-2 text-[10px] font-mono">
-          <span className="text-[var(--hud-text-faint)]">JOB</span>
-          <span className="text-[var(--hud-text-dim)] tabular-nums">
-            {jobId}
-          </span>
-        </div>
-        <div className="h-5 w-px bg-[var(--hud-line)]" />
         <LiveClock />
-        <div className="h-5 w-px bg-[var(--hud-line)]" />
-        <LED state={systemState} label={`SYS ${sysLabel}`} />
         {hasJob && (
           <button
             onClick={onReset}
@@ -785,7 +776,7 @@ function StepContext(props: {
 
       {step === 1 && isProcessing && (
         <ProcessingIndicator
-          label={`Aligning specimen`}
+          label={`Aligning 3D Scan`}
           fileName={fileName}
         />
       )}
@@ -799,10 +790,10 @@ function StepContext(props: {
         />
       )}
 
-      {step === 2 && <FabricationStatus fileName={fileName} />}
+      {step === 2 && <ProcessingStatus fileName={fileName} />}
 
       {step === 3 && assets && (
-        <ExtractionPanel
+        <ExportPanel
           viewMode={viewMode}
           setViewMode={setViewMode}
           assets={assets}
@@ -850,7 +841,7 @@ function UploadDropzone({
           </div>
           <div className="flex flex-col gap-1">
             <span className="font-display text-[12px] uppercase tracking-[0.16em] text-[var(--hud-teal-bright)]">
-              Drop Specimen
+              Drop 3D Scan
             </span>
             <span className="font-mono text-[10px] text-[var(--hud-text-faint)]">
               .stl · drag here or click to browse
@@ -899,7 +890,7 @@ function FeatureTagger({
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between text-[10px] font-mono">
         <span className="text-[var(--hud-text-dim)]">
-          TARGET PROGRESS
+          ALIGNMENT PROGRESS
         </span>
         <span className="text-[var(--hud-teal-bright)] tabular-nums">
           {progress}/{featurePoints.length}
@@ -1014,13 +1005,13 @@ function FeatureButton({
 }
 
 // ──────────────────────────────────────────────────────────────────
-// STEP 2 — FABRICATION STATUS
+// STEP 2 — PROCESSING STATUS
 // ──────────────────────────────────────────────────────────────────
 
-function FabricationStatus({ fileName }: { fileName: string | null }) {
+function ProcessingStatus({ fileName }: { fileName: string | null }) {
   const lines = useMemo(
     () => [
-      `spec ingested :: ${fileName ?? "unknown.stl"}`,
+      `3d scan ingested :: ${fileName ?? "unknown.stl"}`,
       "voxelizing @ 0.25mm pitch...",
       "ransac slide detection :: locked",
       "mabr rotation :: aligned",
@@ -1080,10 +1071,10 @@ function ProcessingIndicator({
 }
 
 // ──────────────────────────────────────────────────────────────────
-// STEP 3 — EXTRACTION PANEL
+// STEP 3 — EXPORT PANEL
 // ──────────────────────────────────────────────────────────────────
 
-function ExtractionPanel({
+function ExportPanel({
   viewMode,
   setViewMode,
   accessories,
@@ -1224,7 +1215,7 @@ function ExtractionPanel({
       {/* Export actions */}
       <div className="flex flex-col gap-1.5 pt-2 border-t border-[var(--hud-line)]">
         <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider mb-1">
-          // EXTRACT.TARGETS
+          // EXPORT.TARGETS
         </div>
         <a
           href={assets.fullUrl}
@@ -1361,7 +1352,7 @@ function AccessoryCard({
             }
           />
           <Slider
-            label="ROT Z"
+            label="ROTATE Z"
             code="↻"
             unit="deg"
             value={acc.rotation[2]}
@@ -1547,7 +1538,7 @@ function ParamPanel({
           disabled={disabled || !params.retention}
         />
         <Slider
-          label="ROT Z"
+          label="ROTATE Z"
           code="θ"
           unit="deg"
           value={params.retentionRotateDeg}
@@ -1558,7 +1549,7 @@ function ParamPanel({
           disabled={disabled || !params.retention}
         />
         <Slider
-          label="CORNER R"
+          label="RADIUS"
           code="r"
           unit="mm"
           value={params.retentionCornerRadius}
@@ -1662,14 +1653,14 @@ function ViewportHUD({
 }) {
   const modeLabel =
     step === 1
-      ? "AWAITING SPECIMEN"
+      ? "AWAITING 3D SCAN"
       : step === 1.5
       ? activeFeatureIndex !== null
         ? `TAG :: ${featurePoints[activeFeatureIndex].label}`
-        : "TARGET ACQUISITION"
+        : "ALIGNMENT ACQUISITION"
       : step === 2
-      ? "FABRICATING"
-      : `EXTRACTION · ${viewMode.toUpperCase()}`;
+      ? "PROCESSING"
+      : `EXPORT · ${viewMode.toUpperCase()}`;
 
   return (
     <div className="absolute inset-0 pointer-events-none select-none">
@@ -1723,15 +1714,6 @@ function ViewportHUD({
       {/* Top-right readout */}
       <div className="absolute top-3 right-3 flex flex-col items-end gap-2 pointer-events-none">
         <div className="bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line)] px-3 py-1.5 flex items-center gap-3">
-          <div className="flex flex-col leading-none items-end">
-            <span className="text-[8.5px] font-mono text-[var(--hud-text-faint)] tracking-wider">
-              JOB.ID
-            </span>
-            <span className="font-mono text-[11px] text-[var(--hud-text-dim)] tabular-nums">
-              {jobId}
-            </span>
-          </div>
-          <div className="h-6 w-px bg-[var(--hud-line)]" />
           <div className="flex flex-col leading-none items-end">
             <span className="text-[8.5px] font-mono text-[var(--hud-text-faint)] tracking-wider">
               STEP
@@ -1931,7 +1913,7 @@ function GeneratedInfo({
     ["SMOOTH σ", `${params.smoothSigma}`, "default"],
     ["FACES", params.plugDecimTarget.toLocaleString(), "default"],
     ["MIRROR", params.mirror ? "ON" : "OFF", params.mirror ? "accent" : "default"],
-    ["ROT Z", `${params.rotateZDeg}°`, "default"],
+    ["ROTATE Z", `${params.rotateZDeg}°`, "default"],
   ];
   const retRows: [string, string][] = params.retention
     ? [

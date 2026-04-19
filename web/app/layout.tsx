@@ -17,7 +17,7 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "LLOD · FABRICATOR",
+  title: "LLOD · HOLSTER WORKSHOP",
   description: "Tactical mold fabrication console — firearm scan to kydex mold.",
 };
 
