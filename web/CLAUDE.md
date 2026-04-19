@@ -6,10 +6,13 @@
 - **Negative X (-X):** Grip / Holster Entrance side (Left side of screen).
 - **Animation:** 3D Scan enters from Left (-X) and moves Right (+X), plunging into the mold.
 
-## Feature Logic
-- **Slide Release Clearance:** Channels MUST extend from the tagged point toward the **holster entrance (+X)**.
-- **Voxel Grid:** The backend voxel grid is "swept" and inverted. **Index 0** in the `cavity` grid always represents the **holster entrance**.
-- **Carving Direction:** To create a draw path, always carve from **index 0** (the entrance) to the feature's tagged location.
+## Universal Carver Rule (CRITICAL)
+- **World Space:** +X is Muzzle, -X is Grip.
+- **Voxel Space:** Index 0 is the ENTRANCE (Grip). The grid is reversed.
+- **Conversion Math:** 
+    - `index_i = (insertion_vox - 1) - (world_x - origin_x) / pitch`
+    - `world_x = origin_x + (insertion_vox - 1 - index_i) * pitch`
+- **Synchronization:** The `overlay.tsx` (Three.js) and `apply.py` (Python) MUST use these exact mappings to ensure wireframes match physical carving.
 
 ## Style Guidelines
 - **Frontend:** React Three Fiber, Tailwind CSS, Lucide icons, HUD theme.
