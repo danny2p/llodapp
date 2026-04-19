@@ -19,6 +19,7 @@ import sys
 import uuid
 from pathlib import Path
 
+import uvicorn
 from fastapi import FastAPI, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -29,11 +30,11 @@ JOBS_DIR = HERE / "jobs"
 JOBS_DIR.mkdir(exist_ok=True)
 ACCESSORIES_DIR = HERE.parent / "accessories"
 
-app = FastAPI(title="LLOD Mold Maker")
+app = FastAPI(title="LLOD Holster Workshop")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=["*"],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
@@ -267,3 +268,7 @@ if ACCESSORIES_DIR.exists():
 else:
     ACCESSORIES_DIR.mkdir(exist_ok=True)
     app.mount("/accessories", StaticFiles(directory=ACCESSORIES_DIR), name="accessories")
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
