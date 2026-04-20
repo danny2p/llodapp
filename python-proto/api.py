@@ -20,7 +20,7 @@ import uuid
 from pathlib import Path
 
 import uvicorn
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import FastAPI, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -30,6 +30,8 @@ JOBS_DIR = HERE / "jobs"
 JOBS_DIR.mkdir(exist_ok=True)
 ACCESSORIES_DIR = HERE.parent / "accessories"
 SAMPLES_DIR = HERE / "samples"
+CONFIGS_DIR = HERE / "configs"
+CONFIGS_DIR.mkdir(exist_ok=True)
 
 app = FastAPI(title="LLOD Holster Workshop")
 ...
@@ -445,6 +447,32 @@ async def download_merged(
         filename=f"{side}-half-with-accessories.stl",
         media_type="application/octet-stream",
     )
+
+
+@app.post("/api/save-config")
+async def save_config(request: Request) -> dict:
+    body = await request.json()
+    filename = body.get("filename", "")
+    safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in filename)
+    if not safe_name.endswith(".json"):
+        raise HTTPException(status_code=400, detail="filename must end in .json")
+    config_path = CONFIGS_DIR / safe_name
+    config_path.write_text(json.dumps(body, indent=2))
+    return {"saved": safe_name}
+
+
+@app.get("/api/configs")
+def list_configs(prefix: str = "") -> list[str]:
+    return [p.name for p in sorted(CONFIGS_DIR.glob("*.json")) if p.name.startswith(prefix)]
+
+
+@app.get("/api/configs/{filename}")
+def get_config(filename: str) -> dict:
+    safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in filename)
+    config_path = CONFIGS_DIR / safe_name
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail="Config not found")
+    return json.loads(config_path.read_text())
 
 
 app.mount("/jobs", StaticFiles(directory=JOBS_DIR), name="jobs")

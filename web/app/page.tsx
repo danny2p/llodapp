@@ -30,6 +30,8 @@ import {
   Radio,
   Power,
   Settings2,
+  Save,
+  FolderOpen,
 } from "lucide-react";
 import {
   Panel,
@@ -181,6 +183,23 @@ export default function Page() {
   );
   const [processingLogs, setProcessingLogs] = useState<string[]>([]);
   const [processingProgress, setProcessingProgress] = useState(0);
+  const [savedConfigs, setSavedConfigs] = useState<string[]>([]);
+
+  const fetchSavedConfigs = useCallback((stem: string) => {
+    fetch(`${API_BASE}/api/configs?prefix=${encodeURIComponent(stem)}`)
+      .then((res) => res.json())
+      .then((data) => { if (Array.isArray(data)) setSavedConfigs(data); })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (fileName) {
+      const stem = fileName.replace(/\.stl$/i, "");
+      fetchSavedConfigs(stem);
+    } else {
+      setSavedConfigs([]);
+    }
+  }, [fileName, fetchSavedConfigs]);
 
   useEffect(() => {
     fetch(`${API_BASE}/api/accessories`)
@@ -210,6 +229,56 @@ export default function Page() {
   ) => {
     setGlobalParams((p) => ({ ...p, [key]: value }));
   };
+
+  const saveConfig = useCallback(async () => {
+    if (!fileName) return;
+    const configStem = fileName.replace(/\.stl$/i, "");
+    const now = new Date();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    const yyyy = now.getFullYear();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const min = String(now.getMinutes()).padStart(2, "0");
+    const configFilename = `${configStem}-${mm}-${dd}-${yyyy}-${hh}${min}-holster-config.json`;
+    const config = {
+      filename: configFilename,
+      stlStem: configStem,
+      savedAt: now.toISOString(),
+      globalParams,
+      featureStates,
+    };
+    try {
+      await fetch(`${API_BASE}/api/save-config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(config),
+      });
+      fetchSavedConfigs(configStem);
+    } catch (e) {
+      console.error("Failed to save config to server", e);
+    }
+    const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = configFilename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [fileName, globalParams, featureStates, fetchSavedConfigs]);
+
+  const loadConfigData = useCallback(async (configFilename: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/configs/${encodeURIComponent(configFilename)}`);
+      if (!res.ok) return;
+      const config = await res.json();
+      if (config.globalParams) setGlobalParams(config.globalParams);
+      if (config.featureStates) {
+        setFeatureStates((prev) => ({ ...prev, ...config.featureStates }));
+      }
+    } catch (e) {
+      console.error("Failed to load config", e);
+    }
+  }, []);
 
   const updateFeatureEnabled = useCallback(
     (featureId: string, enabled: boolean) => {
@@ -556,6 +625,7 @@ export default function Page() {
         jobId={jobIdDisplay}
         onReset={reset}
         hasJob={!!jobId}
+        onSaveConfig={step >= 1.5 && fileName ? saveConfig : null}
       />
 
       <div className="flex-1 flex min-h-0">
@@ -591,7 +661,23 @@ export default function Page() {
               processingProgress={processingProgress}
               samples={samples}
               onSelectSample={(name) => processFile(null, globalParams, name)}
+              savedConfigs={savedConfigs}
+              onLoadConfig={loadConfigData}
               />
+
+            {fileName && (
+              <Panel title="Config" id="§ CONFIG">
+                <ConfigPanel
+                  savedConfigs={savedConfigs}
+                  onLoadConfig={loadConfigData}
+                  onLoadFromFile={(config) => {
+                    if (config.globalParams) setGlobalParams(config.globalParams as GlobalParams);
+                    if (config.featureStates)
+                      setFeatureStates((prev) => ({ ...prev, ...(config.featureStates as FeatureStates) }));
+                  }}
+                />
+              </Panel>
+            )}
 
             <Panel title="Processing Parameters" id="§ PROC.PARAMS">
               <ParamPanel
@@ -720,6 +806,7 @@ function TopBar({
   jobId,
   onReset,
   hasJob,
+  onSaveConfig,
 }: {
   step: Step;
   systemState: "on" | "warn" | "err";
@@ -727,6 +814,7 @@ function TopBar({
   jobId: string;
   onReset: () => void;
   hasJob: boolean;
+  onSaveConfig: (() => void) | null;
 }) {
   return (
     <header className="relative border-b border-[var(--hud-line)] bg-[var(--hud-void)]/80 backdrop-blur-md h-12 flex items-center px-4 shrink-0 z-10">
@@ -756,6 +844,15 @@ function TopBar({
           </div>
         )}
         <LiveClock />
+        {onSaveConfig && (
+          <button
+            onClick={onSaveConfig}
+            className="p-1.5 border border-[var(--hud-line-strong)] hover:border-[var(--hud-teal-bright)] hover:text-[var(--hud-teal-bright)] text-[var(--hud-text-dim)] transition-colors"
+            title="Save config"
+          >
+            <Save size={12} />
+          </button>
+        )}
         {hasJob && (
           <button
             onClick={onReset}
@@ -880,6 +977,8 @@ function StepContext(props: {
   processingProgress: number;
   samples: string[];
   onSelectSample: (name: string) => void;
+  savedConfigs: string[];
+  onLoadConfig: (filename: string) => void;
 }) {
   const {
     step,
@@ -911,6 +1010,8 @@ function StepContext(props: {
     processingProgress,
     samples,
     onSelectSample,
+    savedConfigs,
+    onLoadConfig,
   } = props;
 
   const meta = STEP_META[step];
@@ -960,6 +1061,8 @@ function StepContext(props: {
           updateFeatureEnabled={updateFeatureEnabled}
           clearFeaturePoint={clearFeaturePoint}
           onGenerate={generateMold}
+          savedConfigs={savedConfigs}
+          onLoadConfig={onLoadConfig}
         />
       )}
 
@@ -1083,6 +1186,8 @@ function FeatureTagger({
   updateFeatureEnabled,
   clearFeaturePoint,
   onGenerate,
+  savedConfigs,
+  onLoadConfig,
 }: {
   featureStates: FeatureStates;
   activeTag: ActiveTag;
@@ -1090,6 +1195,8 @@ function FeatureTagger({
   updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
   clearFeaturePoint: (featureId: string, pointIndex: number) => void;
   onGenerate: () => void;
+  savedConfigs: string[];
+  onLoadConfig: (filename: string) => void;
 }) {
   const defs = publishedFeatures();
   const { tagged, required } = defs.reduce(
@@ -1678,6 +1785,71 @@ function AccessoryCard({
 
 // ────────────────────────────────────────────────────────────────────
 // PARAMETER PANEL
+// ────────────────────────────────────────────────────────────────────
+// CONFIG PANEL
+// ────────────────────────────────────────────────────────────────────
+
+function ConfigPanel({
+  savedConfigs,
+  onLoadConfig,
+  onLoadFromFile,
+}: {
+  savedConfigs: string[];
+  onLoadConfig: (filename: string) => void;
+  onLoadFromFile: (config: Record<string, unknown>) => void;
+}) {
+  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const config = JSON.parse(ev.target?.result as string);
+        onLoadFromFile(config);
+      } catch {
+        console.error("Invalid config file");
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = "";
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="hud-btn cursor-pointer gap-2 justify-start">
+        <FolderOpen size={11} />
+        <span>Load from file</span>
+        <input type="file" accept=".json" onChange={handleFile} className="hidden" />
+      </label>
+      {savedConfigs.length > 0 && (
+        <div className="flex flex-col gap-1 mt-1">
+          <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-widest uppercase px-1">
+            // Saved for this model
+          </div>
+          {savedConfigs.map((name) => (
+            <button
+              key={name}
+              onClick={() => onLoadConfig(name)}
+              className="hud-btn text-left justify-start gap-2"
+              title={`Load ${name}`}
+            >
+              <div className="w-1.5 h-1.5 bg-[var(--hud-teal-bright)]/40 shrink-0" />
+              <span className="truncate text-[10px]">
+                {name.replace(/-holster-config\.json$/, "")}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {savedConfigs.length === 0 && (
+        <span className="text-[9px] font-mono text-[var(--hud-text-ghost)] px-1">
+          No saved configs for this model
+        </span>
+      )}
+    </div>
+  );
+}
+
 // ────────────────────────────────────────────────────────────────────
 
 function ParamPanel({
