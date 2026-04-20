@@ -3,11 +3,14 @@
 }
 
 llod.garage.golf {
-    # Properly escaped bcrypt hash for "lastline"
-    basicauth {
-        danny $$2a$$14$$CdS3w.KMmLQPaAKRxqQt4u1gadCSWmyyyWhkYd.okJQDEUIxX9q6m
+    # Basic Auth (Username: danny, Password: lastline)
+    # Also added tester:test for verification
+    basicauth * {
+        danny $$2a$$14$$koZ37aTDnHzJHXK1A5YLMuOHHEPjz1MxD0.slwyDg6LOOvy.3WW4S
+        tester $$2a$$14$$dMpJHWawGt1Bc1JRWK1M/.rM51ZL7d.mECNAmkfAZqF.D6bHdWW.q
     }
 
+    # Match any path starting with /api, /jobs, or /accessories
     handle /api* {
         reverse_proxy backend:8000
     }
@@ -17,6 +20,8 @@ llod.garage.golf {
     handle /accessories* {
         reverse_proxy backend:8000
     }
+
+    # Fallback to frontend for everything else
     handle {
         reverse_proxy frontend:3000
     }
