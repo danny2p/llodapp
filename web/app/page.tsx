@@ -32,6 +32,8 @@ import {
   Settings2,
   Save,
   FolderOpen,
+  Check,
+  AlertCircle,
 } from "lucide-react";
 import {
   Panel,
@@ -184,6 +186,19 @@ export default function Page() {
   const [processingLogs, setProcessingLogs] = useState<string[]>([]);
   const [processingProgress, setProcessingProgress] = useState(0);
   const [savedConfigs, setSavedConfigs] = useState<string[]>([]);
+  const [activeConfigName, setActiveConfigName] = useState<string | null>(null);
+  const [lastLoadedConfig, setLastLoadedConfig] = useState<{
+    globalParams: GlobalParams;
+    featureStates: FeatureStates;
+  } | null>(null);
+
+  const isConfigOverridden = useMemo(() => {
+    if (!activeConfigName || !lastLoadedConfig) return false;
+    return (
+      JSON.stringify(globalParams) !== JSON.stringify(lastLoadedConfig.globalParams) ||
+      JSON.stringify(featureStates) !== JSON.stringify(lastLoadedConfig.featureStates)
+    );
+  }, [activeConfigName, lastLoadedConfig, globalParams, featureStates]);
 
   const fetchSavedConfigs = useCallback((stem: string) => {
     fetch(`${API_BASE}/api/configs?prefix=${encodeURIComponent(stem)}`)
@@ -275,6 +290,11 @@ export default function Page() {
       if (config.featureStates) {
         setFeatureStates((prev) => ({ ...prev, ...config.featureStates }));
       }
+      setActiveConfigName(configFilename);
+      setLastLoadedConfig({
+        globalParams: config.globalParams || globalParams,
+        featureStates: config.featureStates || featureStates,
+      });
     } catch (e) {
       console.error("Failed to load config", e);
     }
@@ -322,9 +342,7 @@ export default function Page() {
         const s = prev[featureId];
         const pts = [...s.points];
         pts[pointIndex] = coords;
-        const next = { ...prev, [featureId]: { ...s, points: pts } };
-        setActiveTag(findNextUntaggedPoint(next, { featureId, pointIndex }));
-        return next;
+        return { ...prev, [featureId]: { ...s, points: pts } };
       });
     },
     []
@@ -646,6 +664,8 @@ export default function Page() {
                 <ConfigPanel
                   savedConfigs={savedConfigs}
                   onLoadConfig={loadConfigData}
+                  activeConfigName={activeConfigName}
+                  isConfigOverridden={isConfigOverridden}
                   onLoadFromFile={(config) => {
                     if (config.globalParams) setGlobalParams(config.globalParams as GlobalParams);
                     if (config.featureStates)
@@ -662,6 +682,7 @@ export default function Page() {
               activeTag={activeTag}
               setActiveTag={setActiveTag}
               updateFeatureEnabled={updateFeatureEnabled}
+              updateFeatureValue={updateFeatureValue}
               clearFeaturePoint={clearFeaturePoint}
               isProcessing={isProcessing}
               uploadedFile={uploadedFile}
@@ -687,17 +708,9 @@ export default function Page() {
               onSelectSample={(name) => processFile(null, globalParams, name)}
               savedConfigs={savedConfigs}
               onLoadConfig={loadConfigData}
+              activeConfigName={activeConfigName}
+              isConfigOverridden={isConfigOverridden}
               />
-
-            {fileName && (
-              <Panel title="Feature Parameters" id="§ FEATURE.PARAMS" collapsible defaultOpen={true}>
-                <FeatureParamPanel
-                  featureStates={featureStates}
-                  updateFeatureValue={updateFeatureValue}
-                  disabled={isProcessing}
-                />
-              </Panel>
-            )}
 
             {error && (
               <section className="hud-panel border-[rgba(239,68,68,0.45)]">
@@ -855,10 +868,11 @@ function TopBar({
         {onSaveConfig && (
           <button
             onClick={onSaveConfig}
-            className="p-1.5 border border-[var(--hud-line-strong)] hover:border-[var(--hud-teal-bright)] hover:text-[var(--hud-teal-bright)] text-[var(--hud-text-dim)] transition-colors"
+            className="flex items-center gap-1.5 px-2 py-1 border border-[var(--hud-line-strong)] hover:border-[var(--hud-teal-bright)] hover:text-[var(--hud-teal-bright)] text-[var(--hud-text-dim)] transition-colors text-[9px] font-mono font-bold"
             title="Save config"
           >
             <Save size={12} />
+            <span>SAVE</span>
           </button>
         )}
         {hasJob && (
@@ -962,6 +976,7 @@ function StepContext(props: {
   activeTag: ActiveTag;
   setActiveTag: (t: ActiveTag) => void;
   updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
+  updateFeatureValue: (featureId: string, paramId: string, value: FeatureValue) => void;
   clearFeaturePoint: (featureId: string, pointIndex: number) => void;
   isProcessing: boolean;
   uploadedFile: File | null;
@@ -987,6 +1002,8 @@ function StepContext(props: {
   onSelectSample: (name: string) => void;
   savedConfigs: string[];
   onLoadConfig: (filename: string) => void;
+  activeConfigName: string | null;
+  isConfigOverridden: boolean;
 }) {
   const {
     step,
@@ -995,6 +1012,7 @@ function StepContext(props: {
     activeTag,
     setActiveTag,
     updateFeatureEnabled,
+    updateFeatureValue,
     clearFeaturePoint,
     isProcessing,
     uploadedFile,
@@ -1020,6 +1038,8 @@ function StepContext(props: {
     onSelectSample,
     savedConfigs,
     onLoadConfig,
+    activeConfigName,
+    isConfigOverridden,
   } = props;
 
   const meta = STEP_META[step];
@@ -1031,6 +1051,8 @@ function StepContext(props: {
       subtitle={meta.subtitle}
       id={`// STEP.${meta.id}`}
       tone={tone}
+      collapsible
+      defaultOpen={true}
       right={
         isProcessing ? (
           <Pill tone="warn" className="animate-pulse">
@@ -1067,10 +1089,12 @@ function StepContext(props: {
           activeTag={activeTag}
           setActiveTag={setActiveTag}
           updateFeatureEnabled={updateFeatureEnabled}
+          updateFeatureValue={updateFeatureValue}
           clearFeaturePoint={clearFeaturePoint}
           onGenerate={generateMold}
           savedConfigs={savedConfigs}
           onLoadConfig={onLoadConfig}
+          isProcessing={isProcessing}
         />
       )}
 
@@ -1192,19 +1216,23 @@ function FeatureTagger({
   activeTag,
   setActiveTag,
   updateFeatureEnabled,
+  updateFeatureValue,
   clearFeaturePoint,
   onGenerate,
   savedConfigs,
   onLoadConfig,
+  isProcessing,
 }: {
   featureStates: FeatureStates;
   activeTag: ActiveTag;
   setActiveTag: (t: ActiveTag) => void;
   updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
+  updateFeatureValue: (featureId: string, paramId: string, value: FeatureValue) => void;
   clearFeaturePoint: (featureId: string, pointIndex: number) => void;
   onGenerate: () => void;
   savedConfigs: string[];
   onLoadConfig: (filename: string) => void;
+  isProcessing: boolean;
 }) {
   const defs = publishedFeatures();
   const ready = areAllFeaturesReady(featureStates);
@@ -1224,7 +1252,9 @@ function FeatureTagger({
             activeTag={activeTag}
             setActiveTag={setActiveTag}
             updateFeatureEnabled={updateFeatureEnabled}
+            updateFeatureValue={updateFeatureValue}
             clearFeaturePoint={clearFeaturePoint}
+            isProcessing={isProcessing}
           />
         ))}
       </div>
@@ -1247,14 +1277,18 @@ function FeatureTagCard({
   activeTag,
   setActiveTag,
   updateFeatureEnabled,
+  updateFeatureValue,
   clearFeaturePoint,
+  isProcessing,
 }: {
   def: FeatureDef;
   state: FeatureState;
   activeTag: ActiveTag;
   setActiveTag: (t: ActiveTag) => void;
   updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
+  updateFeatureValue: (featureId: string, paramId: string, value: FeatureValue) => void;
   clearFeaturePoint: (featureId: string, pointIndex: number) => void;
+  isProcessing: boolean;
 }) {
   const { complete } = featureProgress(def, state);
 
@@ -1287,25 +1321,36 @@ function FeatureTagCard({
             }`}
           >
             <div className="flex items-stretch h-11">
-              {/* Power Toggle Section */}
-              {isPrimary && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    const next = !state.enabled;
-                    updateFeatureEnabled(def.id, next);
-                    if (!next && activeTag?.featureId === def.id) setActiveTag(null);
+              {/* Power Toggle Section with Color Sliver */}
+              <div className="w-9 shrink-0 flex flex-col border-r border-[var(--hud-line)]">
+                {isPrimary ? (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const next = !state.enabled;
+                      updateFeatureEnabled(def.id, next);
+                      if (!next && activeTag?.featureId === def.id) setActiveTag(null);
+                    }}
+                    className={`flex-1 flex items-center justify-center transition-colors ${
+                      state.enabled
+                        ? "text-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.05)]"
+                        : "text-[var(--hud-text-ghost)] hover:text-[var(--hud-text-dim)]"
+                    }`}
+                    title={state.enabled ? "Disable Feature" : "Enable Feature"}
+                  >
+                    <Power size={12} strokeWidth={state.enabled ? 3 : 2} />
+                  </button>
+                ) : (
+                  <div className="flex-1" />
+                )}
+                <div
+                  className="h-1 w-full"
+                  style={{
+                    backgroundColor: state.enabled ? def.color : "var(--hud-line)",
+                    boxShadow: state.enabled ? `0 0 4px ${def.color}` : "none",
                   }}
-                  className={`w-9 shrink-0 flex items-center justify-center border-r border-[var(--hud-line)] transition-colors ${
-                    state.enabled
-                      ? "text-[var(--hud-teal-bright)] bg-[rgba(45,212,191,0.05)]"
-                      : "text-[var(--hud-text-ghost)] hover:text-[var(--hud-text-dim)]"
-                  }`}
-                  title={state.enabled ? "Disable Feature" : "Enable Feature"}
-                >
-                  <Power size={12} strokeWidth={state.enabled ? 3 : 2} />
-                </button>
-              )}
+                />
+              </div>
 
               {/* Main Interaction Area */}
               <div
@@ -1322,33 +1367,12 @@ function FeatureTagCard({
                   def.points.length > 0 ? "cursor-pointer" : "cursor-default"
                 }`}
               >
-                {/* Feature Status indicator */}
-                <div className="relative w-2 h-2 shrink-0">
-                  <div
-                    className="absolute inset-0 opacity-40"
-                    style={{ background: def.color, filter: "blur(3px)" }}
-                  />
-                  <div
-                    className="relative w-2 h-2"
-                    style={{
-                      background: (coord && state.enabled) || (def.points.length === 0 && state.enabled) ? def.color : "transparent",
-                      border: `1px solid ${def.color}`,
-                      boxShadow: (coord && state.enabled) || (def.points.length === 0 && state.enabled) ? `0 0 5px ${def.color}` : "none",
-                    }}
-                  />
-                </div>
-
                 <div className="flex flex-col min-w-0 flex-1">
                   <div className="flex items-baseline gap-2">
                     <span className={`font-display text-[11px] uppercase tracking-[0.14em] transition-colors ${
                       active ? "text-[var(--hud-teal-bright)]" : "text-[var(--hud-text)]"
                     }`}>
                       {(isPrimary || !slot) ? def.label : slot.label}
-                      {isPrimary && def.intent !== "marker" && (
-                        <span className="ml-2 text-[8.5px] lowercase font-mono text-[var(--hud-text-faint)] tracking-normal normal-case">
-                          ({def.intent})
-                        </span>
-                      )}
                     </span>
                     {!isPrimary && slot && (
                       <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
@@ -1372,33 +1396,55 @@ function FeatureTagCard({
                   )}
                 </div>
 
-                {active && (
-                  <div className="flex items-center gap-1.5 px-1.5 py-0.5 bg-[var(--hud-teal-bright)] text-[var(--hud-void)] rounded-sm">
-                    <Crosshair size={10} className="animate-hud-spin-slow" />
-                    <span className="text-[8px] font-bold">READY</span>
-                  </div>
-                )}
-
-                {coord && state.enabled && !active && (
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      clearFeaturePoint(def.id, i);
-                    }}
-                    className="p-1.5 text-[var(--hud-text-faint)] hover:text-[var(--hud-red)] transition-colors"
-                    title="Clear point"
-                  >
-                    <X size={12} />
-                  </button>
-                )}
+                <div className="flex flex-col items-end justify-center min-w-[48px]">
+                  {state.enabled && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (coord && window.confirm(`Unset ${def.label}?`)) {
+                          clearFeaturePoint(def.id, i);
+                        }
+                      }}
+                      disabled={!coord}
+                      className={`flex items-center gap-1 px-1.5 py-1 rounded-sm border transition-all ${
+                        coord || (def.points.length === 0)
+                          ? "bg-[var(--hud-green)]/10 text-[var(--hud-green)] border-[var(--hud-green)]/30 hover:bg-[var(--hud-green)]/20 cursor-pointer"
+                          : "bg-[var(--hud-red)]/10 text-[var(--hud-red)] border-[var(--hud-red)]/30 cursor-default"
+                      }`}
+                    >
+                      {coord || (def.points.length === 0) ? (
+                        <Check size={8} />
+                      ) : active ? (
+                        <Crosshair size={8} className="animate-hud-spin-slow" />
+                      ) : (
+                        <AlertCircle size={8} />
+                      )}
+                      <span className="text-[7px] font-bold uppercase tracking-wider">
+                        {coord || (def.points.length === 0) ? "SET" : "WAITING"}
+                      </span>
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         );
       })}
+
+      {state.enabled && def.params.length > 0 && (
+        <div className="mt-0.5 animate-hud-fade-up">
+          <FeatureParamGroup
+            def={def}
+            state={state}
+            onUpdate={(paramId, value) => updateFeatureValue(def.id, paramId, value)}
+            disabled={isProcessing}
+          />
+        </div>
+      )}
     </div>
   );
 }
+
 
 // ────────────────────────────────────────────────────────────────────
 // STEP 2 — PROCESSING STATUS
@@ -1497,16 +1543,33 @@ function ExportPanel({
 
   return (
     <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-1.5 pb-2 border-b border-[var(--hud-line)]">
+        <button
+          onClick={onRerun}
+          className="text-[10px] font-mono uppercase tracking-wider text-[var(--hud-text-dim)] hover:text-[var(--hud-teal-bright)] flex items-center justify-center gap-1.5 transition-colors py-1 bg-[var(--hud-panel-2)] border border-[var(--hud-line)]"
+        >
+          <Settings2 size={10} />
+          Rebuild / Adjust
+        </button>
+        <button
+          onClick={reset}
+          className="text-[10px] font-mono uppercase tracking-wider text-[var(--hud-text-faint)] hover:text-[var(--hud-amber-bright)] flex items-center justify-center gap-1.5 transition-colors py-1 bg-[var(--hud-panel-2)] border border-[var(--hud-line)]"
+        >
+          <RotateCcw size={10} />
+          New Session
+        </button>
+      </div>
+
       <div>
         <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider mb-1.5">
-          // WORKBENCH.VIEW
+          // VIEW
         </div>
         <div className="grid grid-cols-3 gap-1 p-0.5 border border-[var(--hud-line-strong)] bg-[var(--hud-panel-3)]/40">
           {(
             [
-              { v: "unified" as const, Icon: LayoutGrid, label: "UNI" },
-              { v: "left" as const, Icon: Square, label: "L" },
-              { v: "right" as const, Icon: Square, label: "R" },
+              { v: "unified" as const, Icon: LayoutGrid, label: "COMBINED" },
+              { v: "left" as const, Icon: Square, label: "LEFT" },
+              { v: "right" as const, Icon: Square, label: "RIGHT" },
             ] satisfies { v: ViewMode; Icon: typeof Square; label: string }[]
           ).map(({ v, Icon, label }) => (
             <button
@@ -1600,7 +1663,7 @@ function ExportPanel({
 
       <div className="flex flex-col gap-1.5 pt-2 border-t border-[var(--hud-line)]">
         <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-wider mb-1">
-          // EXPORT.TARGETS
+          // EXPORT
         </div>
         <a
           href={assets.fullUrl}
@@ -1633,22 +1696,6 @@ function ExportPanel({
               </span>
             )}
           </Button>
-        </div>
-        <div className="grid grid-cols-2 gap-1.5 mt-1">
-          <button
-            onClick={onRerun}
-            className="text-[10px] font-mono uppercase tracking-wider text-[var(--hud-text-dim)] hover:text-[var(--hud-teal-bright)] flex items-center justify-center gap-1.5 transition-colors py-1 bg-[var(--hud-panel-2)] border border-[var(--hud-line)]"
-          >
-            <Settings2 size={10} />
-            Rebuild / Adjust
-          </button>
-          <button
-            onClick={reset}
-            className="text-[10px] font-mono uppercase tracking-wider text-[var(--hud-text-faint)] hover:text-[var(--hud-amber-bright)] flex items-center justify-center gap-1.5 transition-colors py-1 bg-[var(--hud-panel-2)] border border-[var(--hud-line)]"
-          >
-            <RotateCcw size={10} />
-            New Session
-          </button>
         </div>
       </div>
     </div>
@@ -1774,10 +1821,14 @@ function AccessoryCard({
 function ConfigPanel({
   savedConfigs,
   onLoadConfig,
+  activeConfigName,
+  isConfigOverridden,
   onLoadFromFile,
 }: {
   savedConfigs: string[];
   onLoadConfig: (filename: string) => void;
+  activeConfigName: string | null;
+  isConfigOverridden: boolean;
   onLoadFromFile: (config: Record<string, unknown>) => void;
 }) {
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -1808,19 +1859,30 @@ function ConfigPanel({
           <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-widest uppercase px-1">
             // Saved for this model
           </div>
-          {savedConfigs.map((name) => (
-            <button
-              key={name}
-              onClick={() => onLoadConfig(name)}
-              className="hud-btn text-left justify-start gap-2"
-              title={`Load ${name}`}
-            >
-              <div className="w-1.5 h-1.5 bg-[var(--hud-teal-bright)]/40 shrink-0" />
-              <span className="truncate text-[10px]">
-                {name.replace(/-holster-config\.json$/, "")}
-              </span>
-            </button>
-          ))}
+          {savedConfigs.map((name) => {
+            const active = activeConfigName === name;
+            return (
+              <button
+                key={name}
+                onClick={() => onLoadConfig(name)}
+                className={`hud-btn text-left justify-start gap-3 relative transition-all duration-300 ${
+                  active 
+                    ? "border-white bg-white/20 shadow-[0_0_20px_rgba(255,255,255,0.4),inset_0_0_10px_rgba(255,255,255,0.2)] text-white z-10" 
+                    : "opacity-30 hover:opacity-100"
+                }`}
+                title={`Load ${name}`}
+              >
+                <span className={`truncate text-[10px] flex-1 ${active ? "font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : ""}`}>
+                  {name.replace(/-holster-config\.json$/, "")}
+                </span>
+                {active && (
+                  <span className="text-[8px] font-mono text-white absolute right-3 tracking-tighter animate-pulse bg-white/40 px-1 py-0.5 rounded-sm shadow-[0_0_15px_rgba(255,255,255,0.6)]">
+                    {isConfigOverridden ? "// ACTIVE (OVERRIDDEN)" : "// ACTIVE"}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       )}
       {savedConfigs.length === 0 && (
@@ -1868,7 +1930,7 @@ function GlobalParamPanel({
         </div>
       )}
 
-      <Group title="Global" code="§ GLOBAL" tone="accent">
+      <Group title="Physical Color & Dimension" code="§ PHYS" tone="accent">
         <ColorPicker
           label="3D SCAN COLOR"
           code="RGB"

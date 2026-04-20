@@ -39,7 +39,7 @@ export function Panel({
     <section className={`hud-panel ${className}`}>
       {title && (
         <header 
-          className={`flex items-center justify-between px-3 py-2 border-b border-[var(--hud-line)] ${collapsible ? "cursor-pointer select-none" : ""}`}
+          className={`flex items-center justify-between px-3 py-2 border-b border-[var(--hud-line)] transition-colors group/p ${collapsible ? "cursor-pointer select-none hover:bg-[rgba(255,255,255,0.02)]" : ""}`}
           onClick={() => collapsible && setIsOpen(!isOpen)}
         >
           <div className="flex items-center gap-2 min-w-0">
@@ -51,7 +51,7 @@ export function Panel({
                     {id}
                   </span>
                 )}
-                <h3 className="font-display text-[11px] uppercase tracking-[0.12em] text-[var(--hud-teal-bright)] truncate">
+                <h3 className={`font-display text-[11px] uppercase tracking-[0.12em] truncate transition-colors ${collapsible ? "group-hover/p:text-white text-[var(--hud-teal-bright)]" : "text-[var(--hud-teal-bright)]"}`}>
                   {title}
                 </h3>
               </div>
@@ -65,10 +65,12 @@ export function Panel({
           <div className="flex items-center gap-2">
             {right}
             {collapsible && (
-              <ChevronDown
-                size={14}
-                className={`text-[var(--hud-text-faint)] transition-transform duration-200 ${isOpen ? "rotate-0" : "-rotate-90"}`}
-              />
+              <div className={`w-5 h-5 flex items-center justify-center rounded border transition-all ${isOpen ? "bg-[var(--hud-teal)]/10 border-[var(--hud-teal)]/30" : "bg-transparent border-[var(--hud-line-strong)] group-hover/p:border-[var(--hud-teal-bright)]"}`}>
+                <ChevronDown
+                  size={12}
+                  className={`text-[var(--hud-text-faint)] transition-transform duration-200 group-hover/p:text-[var(--hud-teal-bright)] ${isOpen ? "rotate-0" : "-rotate-90"}`}
+                />
+              </div>
             )}
           </div>
         </header>
@@ -112,7 +114,7 @@ export function Group({
         type="button"
         onClick={() => collapsible && setOpen((v) => !v)}
         disabled={!collapsible}
-        className="flex items-center justify-between w-full py-2.5 px-3 text-left group/g cursor-pointer disabled:cursor-default"
+        className="flex items-center justify-between w-full py-2.5 px-3 text-left group/g cursor-pointer disabled:cursor-default transition-colors"
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={`w-[2px] h-3 ${barColor}`} aria-hidden />
@@ -121,17 +123,19 @@ export function Group({
               {code}
             </span>
           )}
-          <span className="font-display text-[10.5px] uppercase tracking-[0.14em] text-[var(--hud-text-dim)] group-hover/g:text-[var(--hud-teal-bright)] transition-colors">
+          <span className="font-display text-[10.5px] uppercase tracking-[0.14em] text-[var(--hud-text-dim)] group-hover/g:text-white transition-colors">
             {title}
           </span>
         </div>
         {collapsible && (
-          <ChevronDown
-            size={12}
-            className={`text-[var(--hud-text-faint)] group-hover/g:text-[var(--hud-teal-bright)] transition-transform ${
-              open ? "rotate-0" : "-rotate-90"
-            }`}
-          />
+          <div className={`w-4 h-4 flex items-center justify-center rounded-sm border transition-all ${open ? "bg-[var(--hud-teal)]/10 border-[var(--hud-teal)]/30" : "bg-transparent border-[var(--hud-line)] group-hover/g:border-[var(--hud-teal-bright)]"}`}>
+            <ChevronDown
+              size={10}
+              className={`text-[var(--hud-text-faint)] group-hover/g:text-[var(--hud-teal-bright)] transition-transform ${
+                open ? "rotate-0" : "-rotate-90"
+              }`}
+            />
+          </div>
         )}
       </button>
       {open && (
