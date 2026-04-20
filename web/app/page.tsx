@@ -883,7 +883,11 @@ function TopBar({
         )}
         {hasJob && (
           <button
-            onClick={onReset}
+            onClick={() => {
+              if (window.confirm("Are you sure you want to reset the session? All unsaved progress will be lost.")) {
+                onReset();
+              }
+            }}
             className="ml-1 p-1.5 border border-[var(--hud-line-strong)] hover:border-[var(--hud-amber)] hover:text-[var(--hud-amber-bright)] text-[var(--hud-text-dim)] transition-colors"
             title="Reset session"
           >
@@ -1784,11 +1788,10 @@ function AccessoryCard({
             }
           />
           <Slider
-            label="STANDOFF Z"
+            label="Z HEIGHT"
             code="↑"
             unit="mm"
-            value={Math.abs(acc.position[2])}
-            min={-50}
+            value={Math.abs(acc.position[2])}            min={-50}
             max={50}
             step={0.1}
             onChange={(v) =>
