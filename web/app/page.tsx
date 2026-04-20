@@ -122,7 +122,7 @@ const STEP_META: Record<
   },
   1.5: {
     id: "02",
-    title: "ALIGN",
+    title: "ENHANCE",
     subtitle: "Tag feature anchors",
     icon: <Crosshair size={14} />,
   },
@@ -631,6 +631,30 @@ export default function Page() {
       <div className="flex-1 flex min-h-0">
         <aside className="w-[360px] shrink-0 border-r border-[var(--hud-line)] bg-[var(--hud-panel)]/60 hud-grid overflow-y-auto hud-scroll animate-hud-slide-left">
           <div className="p-3 flex flex-col gap-3">
+            <Panel title="Global Parameters" id="§ GLOBAL" collapsible defaultOpen={false}>
+              <GlobalParamPanel
+                globalParams={globalParams}
+                updateGlobalParam={updateGlobalParam}
+                disabled={isProcessing}
+                canRerun={!!uploadedFile}
+                onRerun={rerun}
+              />
+            </Panel>
+
+            {fileName && (
+              <Panel title="Load a Config" id="§ CONFIG" collapsible defaultOpen={false}>
+                <ConfigPanel
+                  savedConfigs={savedConfigs}
+                  onLoadConfig={loadConfigData}
+                  onLoadFromFile={(config) => {
+                    if (config.globalParams) setGlobalParams(config.globalParams as GlobalParams);
+                    if (config.featureStates)
+                      setFeatureStates((prev) => ({ ...prev, ...(config.featureStates as FeatureStates) }));
+                  }}
+                />
+              </Panel>
+            )}
+
             <StepContext
               step={step}
               setStep={setStep}
@@ -666,31 +690,14 @@ export default function Page() {
               />
 
             {fileName && (
-              <Panel title="Config" id="§ CONFIG">
-                <ConfigPanel
-                  savedConfigs={savedConfigs}
-                  onLoadConfig={loadConfigData}
-                  onLoadFromFile={(config) => {
-                    if (config.globalParams) setGlobalParams(config.globalParams as GlobalParams);
-                    if (config.featureStates)
-                      setFeatureStates((prev) => ({ ...prev, ...(config.featureStates as FeatureStates) }));
-                  }}
+              <Panel title="Feature Parameters" id="§ FEATURE.PARAMS" collapsible defaultOpen={true}>
+                <FeatureParamPanel
+                  featureStates={featureStates}
+                  updateFeatureValue={updateFeatureValue}
+                  disabled={isProcessing}
                 />
               </Panel>
             )}
-
-            <Panel title="Processing Parameters" id="§ PROC.PARAMS">
-              <ParamPanel
-                globalParams={globalParams}
-                updateGlobalParam={updateGlobalParam}
-                featureStates={featureStates}
-                updateFeatureEnabled={updateFeatureEnabled}
-                updateFeatureValue={updateFeatureValue}
-                disabled={isProcessing}
-                canRerun={!!uploadedFile}
-                onRerun={rerun}
-              />
-            </Panel>
 
             {error && (
               <section className="hud-panel border-[rgba(239,68,68,0.45)]">
@@ -746,6 +753,7 @@ export default function Page() {
     </div>
   );
 }
+
 
 async function readErr(res: Response): Promise<string> {
   let msg = `${res.status}`;
@@ -1049,7 +1057,7 @@ function StepContext(props: {
           fileName={fileName}
           logs={processingLogs}
           progress={processingProgress}
-          label="Alignment Active"
+          label="Aligning & Normalizing"
         />
       )}
 
@@ -1140,7 +1148,7 @@ function UploadDropzone({
       {samples.length > 0 && (
         <div className="flex flex-col gap-2">
           <div className="text-[9px] font-mono text-[var(--hud-text-faint)] tracking-widest uppercase px-1">
-            // Use Sample Specimen
+            // OR USE A SAMPLE BELOW
           </div>
           <div className="grid grid-cols-1 gap-1">
             {samples.map((name) => (
@@ -1199,39 +1207,13 @@ function FeatureTagger({
   onLoadConfig: (filename: string) => void;
 }) {
   const defs = publishedFeatures();
-  const { tagged, required } = defs.reduce(
-    (acc, def) => {
-      const s = featureStates[def.id];
-      if (!s?.enabled) return acc;
-      const { tagged, required } = featureProgress(def, s);
-      return { tagged: acc.tagged + tagged, required: acc.required + required };
-    },
-    { tagged: 0, required: 0 }
-  );
   const ready = areAllFeaturesReady(featureStates);
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center justify-between text-[10px] font-mono">
-        <span className="text-[var(--hud-text-dim)]">ALIGNMENT PROGRESS</span>
-        <span className="text-[var(--hud-teal-bright)] tabular-nums">
-          {tagged}/{required}
-        </span>
-      </div>
-      {required > 0 && (
-        <div className="flex gap-1">
-          {Array.from({ length: required }).map((_, i) => (
-            <div
-              key={i}
-              className={`flex-1 h-[3px] ${
-                i < tagged
-                  ? "bg-[var(--hud-teal-bright)] shadow-[0_0_6px_rgba(94,234,212,0.6)]"
-                  : "bg-[var(--hud-text-ghost)]"
-              }`}
-            />
-          ))}
-        </div>
-      )}
+      <h3 className="font-display text-[12px] uppercase tracking-[0.15em] text-[var(--hud-teal-bright)] mb-1 px-1">
+        Enable & Place features
+      </h3>
 
       <div className="flex flex-col gap-2">
         {defs.map((def) => (
@@ -1852,12 +1834,9 @@ function ConfigPanel({
 
 // ────────────────────────────────────────────────────────────────────
 
-function ParamPanel({
+function GlobalParamPanel({
   globalParams,
   updateGlobalParam,
-  featureStates,
-  updateFeatureEnabled,
-  updateFeatureValue,
   disabled,
   canRerun,
   onRerun,
@@ -1866,13 +1845,6 @@ function ParamPanel({
   updateGlobalParam: <K extends keyof GlobalParams>(
     key: K,
     value: GlobalParams[K]
-  ) => void;
-  featureStates: FeatureStates;
-  updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
-  updateFeatureValue: (
-    featureId: string,
-    paramId: string,
-    value: FeatureValue
   ) => void;
   disabled: boolean;
   canRerun: boolean;
@@ -1994,7 +1966,25 @@ function ParamPanel({
           disabled={disabled}
         />
       </Group>
+    </div>
+  );
+}
 
+function FeatureParamPanel({
+  featureStates,
+  updateFeatureValue,
+  disabled,
+}: {
+  featureStates: FeatureStates;
+  updateFeatureValue: (
+    featureId: string,
+    paramId: string,
+    value: FeatureValue
+  ) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="flex flex-col">
       {publishedFeatures().map((def) => {
         const state = featureStates[def.id];
         if (!state?.enabled) return null;
@@ -2003,7 +1993,6 @@ function ParamPanel({
             key={def.id}
             def={def}
             state={state}
-            onToggleEnabled={(v) => updateFeatureEnabled(def.id, v)}
             onUpdate={(paramId, value) =>
               updateFeatureValue(def.id, paramId, value)
             }
@@ -2018,26 +2007,17 @@ function ParamPanel({
 function FeatureParamGroup({
   def,
   state,
-  onToggleEnabled,
   onUpdate,
   disabled,
 }: {
   def: FeatureDef;
   state: FeatureState;
-  onToggleEnabled: (v: boolean) => void;
   onUpdate: (paramId: string, value: FeatureValue) => void;
   disabled: boolean;
 }) {
   const code = `§ ${def.id.toUpperCase().replace(/_/g, ".")}`;
   return (
     <Group title={def.label} code={code} tone="warn">
-      <Toggle
-        label="ENABLED"
-        checked={state.enabled}
-        hint={def.description}
-        onChange={onToggleEnabled}
-        disabled={disabled}
-      />
       {def.params.map((p) => {
         if (p.type === "number") {
           return (
@@ -2085,6 +2065,7 @@ function FeatureParamGroup({
     </Group>
   );
 }
+
 
 // ────────────────────────────────────────────────────────────────────
 // VIEWPORT HUD OVERLAY

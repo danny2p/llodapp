@@ -36,6 +36,7 @@ from mcp.server.fastmcp import FastMCP
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 FEATURES_DIR = PROJECT_ROOT / "web" / "features"
 INDEX_TS = FEATURES_DIR / "index.ts"
+PAGE_TSX = PROJECT_ROOT / "web" / "app" / "page.tsx"
 
 FEATURE_FILES = {"feature.ts", "overlay.tsx", "apply.py"}
 ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -475,6 +476,176 @@ def delete_feature(feature_id: str, confirm: bool = False) -> dict:
     _unregister_from_index(feature_id)
     shutil.rmtree(fdir)
     return {"deleted": feature_id, "confirm": True}
+
+
+# ──────────────────────────────────────────────────────────────────
+# defaults helpers
+# ──────────────────────────────────────────────────────────────────
+
+def _parse_ts_value(raw: str) -> Any:
+    """Parse a TypeScript literal (number / bool / quoted string) to a Python value."""
+    raw = raw.strip().rstrip(",")
+    if raw == "true":
+        return True
+    if raw == "false":
+        return False
+    if raw.startswith('"') and raw.endswith('"'):
+        return raw[1:-1]
+    try:
+        return int(raw) if "." not in raw else float(raw)
+    except ValueError:
+        return raw
+
+
+def _to_ts_value(v: Any) -> str:
+    """Serialise a Python value back to a TypeScript literal."""
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, str):
+        return f'"{v}"'
+    if isinstance(v, float) and v == int(v):
+        return str(int(v))
+    return str(v)
+
+
+def _read_global_params() -> dict:
+    src = PAGE_TSX.read_text()
+    m = re.search(
+        r"const DEFAULT_GLOBAL_PARAMS[^=]+=\s*\{([^}]+)\}",
+        src, re.DOTALL,
+    )
+    if not m:
+        return {}
+    result = {}
+    for line in m.group(1).splitlines():
+        line = line.strip().rstrip(",")
+        if ":" in line and not line.startswith("//"):
+            k, _, v = line.partition(":")
+            result[k.strip()] = _parse_ts_value(v.strip())
+    return result
+
+
+def _read_feature_defaults(fid: str) -> dict:
+    ft = FEATURES_DIR / fid / "feature.ts"
+    if not ft.exists():
+        return {}
+    src = ft.read_text()
+
+    m = re.search(r"enabledByDefault:\s*(true|false)", src)
+    enabled_by_default = m.group(1) == "true" if m else False
+
+    param_defaults = {}
+    for line in src.splitlines():
+        id_m = re.search(r'id:\s*"([^"]+)"', line)
+        def_m = re.search(r"default:\s*([^,}\s]+)", line)
+        if id_m and def_m:
+            param_defaults[id_m.group(1)] = _parse_ts_value(def_m.group(1))
+
+    return {"enabledByDefault": enabled_by_default, "params": param_defaults}
+
+
+# ──────────────────────────────────────────────────────────────────
+# defaults tools
+# ──────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def get_defaults() -> dict:
+    """Return all current default values for global params and every feature.
+
+    Returns:
+      globalParams  — key/value map of DEFAULT_GLOBAL_PARAMS from page.tsx.
+      features      — {featureId: {enabledByDefault, params: {paramId: value}}}
+                      for every registered feature.
+
+    Use this before calling set_feature_defaults or set_global_defaults so
+    you know the current state.
+    """
+    return {
+        "globalParams": _read_global_params(),
+        "features": {fid: _read_feature_defaults(fid) for fid in _registered_ids()},
+    }
+
+
+@mcp.tool()
+def set_feature_defaults(
+    feature_id: str,
+    param_defaults: dict | None = None,
+    enabled_by_default: bool | None = None,
+) -> dict:
+    """Update default param values and/or enabledByDefault for a feature.
+
+    feature_id      — folder name (e.g. "trigger_retention").
+    param_defaults  — {paramId: newDefault} for any subset of params.
+                      Values can be numbers, booleans, or strings.
+    enabled_by_default — if provided, overrides the feature's on/off default.
+
+    Only the specified keys are changed; everything else is left untouched.
+    Returns {id, changed: [...description of changes]}.
+    """
+    fdir = _feature_path(feature_id)
+    ft = fdir / "feature.ts"
+    if not ft.exists():
+        raise FileNotFoundError(f"{feature_id}/feature.ts not found")
+
+    src = ft.read_text()
+    changed: list[str] = []
+
+    if enabled_by_default is not None:
+        new_val = "true" if enabled_by_default else "false"
+        src, n = re.subn(
+            r"enabledByDefault:\s*(true|false)",
+            f"enabledByDefault: {new_val}",
+            src,
+        )
+        if n:
+            changed.append(f"enabledByDefault → {new_val}")
+
+    if param_defaults:
+        lines = src.splitlines(keepends=True)
+        for i, line in enumerate(lines):
+            for param_id, value in param_defaults.items():
+                if f'id: "{param_id}"' in line and "default:" in line:
+                    ts_val = _to_ts_value(value)
+                    new_line = re.sub(
+                        r"(default:\s*)([^,}\s]+)",
+                        rf"\g<1>{ts_val}",
+                        line,
+                    )
+                    if new_line != line:
+                        lines[i] = new_line
+                        changed.append(f"{param_id}.default → {ts_val}")
+        src = "".join(lines)
+
+    ft.write_text(src)
+    return {"id": feature_id, "changed": changed}
+
+
+@mcp.tool()
+def set_global_defaults(params: dict) -> dict:
+    """Update DEFAULT_GLOBAL_PARAMS values in web/app/page.tsx.
+
+    params — {key: newValue} for any subset of global params.
+             Valid keys: voxelPitch, smoothSigma, smoothIter, plugDecimTarget,
+             gunDecimTarget, mirror, rotateZDeg, gunColor, moldColor, totalLength.
+    Values must match the param type (numbers, booleans, or hex strings for colors).
+
+    Only the specified keys are changed. Returns {changed: [...]} describing
+    what was updated, and the full new state of DEFAULT_GLOBAL_PARAMS.
+    """
+    src = PAGE_TSX.read_text()
+    changed: list[str] = []
+
+    for key, value in params.items():
+        ts_val = _to_ts_value(value)
+        # Match the key inside the DEFAULT_GLOBAL_PARAMS block only
+        pattern = rf'(const DEFAULT_GLOBAL_PARAMS[^;]+?{re.escape(key)}:\s*)([^,\n]+)'
+        new_src, n = re.subn(pattern, rf'\g<1>{ts_val}', src, flags=re.DOTALL)
+        if n:
+            src = new_src
+            changed.append(f"{key} → {ts_val}")
+
+    PAGE_TSX.write_text(src)
+    return {"changed": changed, "globalParams": _read_global_params()}
 
 
 if __name__ == "__main__":

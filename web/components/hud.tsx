@@ -15,6 +15,8 @@ export function Panel({
   right,
   className = "",
   tone = "default",
+  collapsible = false,
+  defaultOpen = true,
 }: {
   title?: string;
   id?: string;
@@ -23,7 +25,10 @@ export function Panel({
   right?: React.ReactNode;
   className?: string;
   tone?: "default" | "accent" | "warn";
+  collapsible?: boolean;
+  defaultOpen?: boolean;
 }) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
   const toneBar =
     tone === "accent"
       ? "bg-[var(--hud-teal)]"
@@ -33,7 +38,10 @@ export function Panel({
   return (
     <section className={`hud-panel ${className}`}>
       {title && (
-        <header className="flex items-center justify-between px-3 py-2 border-b border-[var(--hud-line)]">
+        <header 
+          className={`flex items-center justify-between px-3 py-2 border-b border-[var(--hud-line)] ${collapsible ? "cursor-pointer select-none" : ""}`}
+          onClick={() => collapsible && setIsOpen(!isOpen)}
+        >
           <div className="flex items-center gap-2 min-w-0">
             <div className={`w-[3px] h-4 ${toneBar}`} aria-hidden />
             <div className="flex flex-col min-w-0">
@@ -54,10 +62,18 @@ export function Panel({
               )}
             </div>
           </div>
-          {right}
+          <div className="flex items-center gap-2">
+            {right}
+            {collapsible && (
+              <ChevronDown
+                size={14}
+                className={`text-[var(--hud-text-faint)] transition-transform duration-200 ${isOpen ? "rotate-0" : "-rotate-90"}`}
+              />
+            )}
+          </div>
         </header>
       )}
-      <div className="p-3">{children}</div>
+      {(!collapsible || isOpen) && <div className="p-3">{children}</div>}
     </section>
   );
 }
@@ -91,12 +107,12 @@ export function Group({
       : "bg-[var(--hud-line-strong)]";
 
   return (
-    <div className="border-t border-[var(--hud-line)] first:border-t-0">
+    <div className={`border-t border-[var(--hud-line)] first:border-t-0 transition-colors ${open ? "bg-[rgba(255,255,255,0.03)]" : "hover:bg-[rgba(255,255,255,0.015)]"}`}>
       <button
         type="button"
         onClick={() => collapsible && setOpen((v) => !v)}
         disabled={!collapsible}
-        className="flex items-center justify-between w-full py-2.5 px-0 text-left group/g cursor-pointer disabled:cursor-default"
+        className="flex items-center justify-between w-full py-2.5 px-3 text-left group/g cursor-pointer disabled:cursor-default"
       >
         <div className="flex items-center gap-2.5 min-w-0">
           <div className={`w-[2px] h-3 ${barColor}`} aria-hidden />
@@ -119,7 +135,7 @@ export function Group({
         )}
       </button>
       {open && (
-        <div className="pb-3 flex flex-col gap-2.5 animate-hud-fade-up">
+        <div className="pb-4 px-3 flex flex-col gap-2.5 animate-hud-fade-up">
           {children}
         </div>
       )}
