@@ -660,7 +660,13 @@ export default function Page() {
             </Panel>
 
             {fileName && (
-              <Panel title="Load a Config" id="§ CONFIG" collapsible defaultOpen={false}>
+              <Panel
+                title="Load Config (optional)"
+                id="§ CONFIG"
+                collapsible
+                defaultOpen={false}
+                open={isProcessing ? false : undefined}
+              >
                 <ConfigPanel
                   savedConfigs={savedConfigs}
                   onLoadConfig={loadConfigData}
@@ -1259,14 +1265,17 @@ function FeatureTagger({
         ))}
       </div>
 
-      <Button
-        variant="primary"
-        disabled={!ready}
-        onClick={onGenerate}
-        icon={<Zap size={12} />}
-      >
-        Create Split Molds
-      </Button>
+      <div className="sticky -bottom-3 z-20 bg-[var(--hud-panel)]/95 backdrop-blur-md px-1 py-4 -mx-3 border-t border-[var(--hud-line-strong)] shadow-[0_-4px_12px_rgba(0,0,0,0.3)] mt-2">
+        <Button
+          variant="primary"
+          disabled={!ready}
+          onClick={onGenerate}
+          icon={<Zap size={12} />}
+          className="w-full"
+        >
+          Create Split Molds
+        </Button>
+      </div>
     </div>
   );
 }
@@ -1868,7 +1877,7 @@ function ConfigPanel({
                 className={`hud-btn text-left justify-start gap-3 relative transition-all duration-300 ${
                   active 
                     ? "border-white bg-white/20 shadow-[0_0_20px_rgba(255,255,255,0.4),inset_0_0_10px_rgba(255,255,255,0.2)] text-white z-10" 
-                    : "opacity-30 hover:opacity-100"
+                    : "opacity-70 hover:opacity-100"
                 }`}
                 title={`Load ${name}`}
               >

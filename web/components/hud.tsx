@@ -17,6 +17,7 @@ export function Panel({
   tone = "default",
   collapsible = false,
   defaultOpen = true,
+  open: controlledOpen,
 }: {
   title?: string;
   id?: string;
@@ -27,20 +28,24 @@ export function Panel({
   tone?: "default" | "accent" | "warn";
   collapsible?: boolean;
   defaultOpen?: boolean;
+  open?: boolean;
 }) {
-  const [isOpen, setIsOpen] = useState(defaultOpen);
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const isOpen = controlledOpen !== undefined ? controlledOpen : internalOpen;
+
   const toneBar =
     tone === "accent"
       ? "bg-[var(--hud-teal)]"
       : tone === "warn"
       ? "bg-[var(--hud-amber)]"
       : "bg-[var(--hud-line-strong)]";
+
   return (
     <section className={`hud-panel ${className}`}>
       {title && (
         <header 
           className={`flex items-center justify-between px-3 py-2 border-b border-[var(--hud-line)] transition-colors group/p ${collapsible ? "cursor-pointer select-none hover:bg-[rgba(255,255,255,0.02)]" : ""}`}
-          onClick={() => collapsible && setIsOpen(!isOpen)}
+          onClick={() => collapsible && setInternalOpen(!isOpen)}
         >
           <div className="flex items-center gap-2 min-w-0">
             <div className={`w-[3px] h-4 ${toneBar}`} aria-hidden />
