@@ -9,6 +9,7 @@ import ejectionPort from "./ejection_port/feature";
 import genericCut from "./generic_cut/feature";
 import slideCircles from "./slide_circles/feature";
 import sightChannel from "./sight_channel/feature";
+import gunBand from "./gun_band/feature";
 
 export const FEATURES: FeatureDef[] = [
   triggerRetention,
@@ -17,4 +18,5 @@ export const FEATURES: FeatureDef[] = [
   genericCut,
   slideCircles,
   sightChannel,
+  gunBand,
 ];
