@@ -3,23 +3,22 @@
 }
 
 llod.garage.golf {
-    basicauth * {
-        danny '$2a$14$DnQQ8.5J7KlGafu31GWzwOuiNFrIiTZIyTt/dHKiQeG2W4AYkPZtK'
-    }
+    route {
+        basicauth {
+            danny $$2a$$14$$CdS3w.KMmLQPaAKRxqQt4u1gadCSWmyyyWhkYd.okJQDEUIxX9q6m
+        }
 
-    # Match any path starting with /api, /jobs, or /accessories
-    handle /api* {
-        reverse_proxy backend:8000
-    }
-    handle /jobs* {
-        reverse_proxy backend:8000
-    }
-    handle /accessories* {
-        reverse_proxy backend:8000
-    }
-
-    # Fallback to frontend for everything else
-    handle {
-        reverse_proxy frontend:3000
+        handle /api* {
+            reverse_proxy backend:8000
+        }
+        handle /jobs* {
+            reverse_proxy backend:8000
+        }
+        handle /accessories* {
+            reverse_proxy backend:8000
+        }
+        handle {
+            reverse_proxy frontend:3000
+        }
     }
 }
