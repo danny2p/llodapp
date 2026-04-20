@@ -54,6 +54,69 @@ npm run dev
 
 Open `http://localhost:3000` in your browser.
 
+## Authoring features via Claude Desktop (MCP)
+
+`python-proto/mcp_server.py` is a Model Context Protocol server that
+exposes the feature-plugin system to Claude Desktop. Claude does the
+reasoning (asking clarifying questions, writing the TypeScript + Python);
+the server gives it scoped file operations under `web/features/`.
+
+Exposed tools:
+
+| tool | purpose |
+| --- | --- |
+| `list_features` | inventory all plugins with intent, param counts, status |
+| `read_feature` | return `feature.ts` + `overlay.tsx` + `apply.py` |
+| `scaffold_feature` | create folder + stub files + register in `index.ts` |
+| `write_feature_file` | overwrite one of the three files |
+| `register_feature` | add an existing folder to `index.ts` (idempotent) |
+| `validate_feature` | run `py_compile` on `apply.py` + sanity-check metadata |
+| `delete_feature` | remove folder and unregister (destructive, needs `confirm=True`) |
+
+### Install
+
+1. Run `uv sync` in `python-proto/` so the `mcp` package is installed.
+2. Edit (or create) Claude Desktop's config file:
+   ```
+   ~/Library/Application Support/Claude/claude_desktop_config.json
+   ```
+3. Add an `mcpServers` entry pointing at this repo's venv + server script:
+   ```json
+   {
+     "mcpServers": {
+       "llod-features": {
+         "command": "/absolute/path/to/llod-maker/python-proto/.venv/bin/python",
+         "args": ["/absolute/path/to/llod-maker/python-proto/mcp_server.py"]
+       }
+     }
+   }
+   ```
+4. Fully quit Claude Desktop (⌘Q on macOS — closing the window is not
+   enough) and relaunch.
+
+### Verify it loaded
+
+- Look for the tools/slider icon in the chat-input area; clicking it
+  should list `llod-features` with its tools.
+- Or ask in a new chat: *"What MCP tools do you have access to?"*
+- If something's off, check
+  `~/Library/Logs/Claude/mcp-server-llod-features.log`.
+
+### Typical interactions
+
+- *"List the LLOD features"* → `list_features`
+- *"Show me slide_release"* → `read_feature`
+- *"Add a `deepen` 0–5mm param to trigger_retention"* →
+  `read_feature` + `write_feature_file`
+- *"Create a new `grip_channel` feature that carves a…"* → Claude
+  asks about points, params, shape, then calls `scaffold_feature` +
+  `write_feature_file` for the overlay and apply code.
+
+You don't need to restart anything after edits: Next.js HMR picks up
+TypeScript changes, and `api.py` spawns `prototype_v11_mabr.py` as a
+subprocess per job so the next pipeline run uses the latest `apply.py`.
+Just keep both dev servers running.
+
 ## Deployment
 
 ### Prerequisites (DigitalOcean Droplet)
