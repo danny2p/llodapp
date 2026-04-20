@@ -923,7 +923,7 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
           placedAccessories={placedAccessories}
           activeAccessoryId={activeAccessoryId}
           onUpdateAccessory={onUpdateAccessory}
-          onSelectAccessory={onSetActiveAccessory}
+          onSetActiveAccessory={onSetActiveAccessory}
           globalParams={globalParams}
         />
       )}
