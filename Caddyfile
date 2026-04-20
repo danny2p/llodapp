@@ -5,7 +5,7 @@
 llod.garage.golf {
     # Basic Auth (Username: danny, Password: lastline)
     basicauth * {
-        danny `$2a$14$koZ37aTDnHzJHXK1A5YLMuOHHEPjz1MxD0.slwyDg6LOOvy.3WW4S`
+        danny "$$2a$$14$$koZ37aTDnHzJHXK1A5YLMuOHHEPjz1MxD0.slwyDg6LOOvy.3WW4S"
     }
 
     handle /api* {
