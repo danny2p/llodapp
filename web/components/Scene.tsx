@@ -1,6 +1,6 @@
 "use client";
 
-import { Canvas, useFrame, useLoader, useThree } from "@react-three/fiber";
+import { Canvas, useFrame, useLoader, useThree, ThreeEvent } from "@react-three/fiber";
 import {
   OrbitControls,
   MapControls,
@@ -8,6 +8,7 @@ import {
   OrthographicCamera,
   useCursor,
 } from "@react-three/drei";
+import { useDrag } from "@use-gesture/react";
 import { Suspense, useMemo, useRef, useEffect, useState } from "react";
 import * as THREE from "three";
 import { STLLoader } from "three-stdlib";
@@ -127,11 +128,13 @@ function PickingGun({
   activeTag,
   onTagPoint,
   gunColor,
+  meshRef,
 }: {
   url: string;
   activeTag: ActiveTag;
   onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
   gunColor: string;
+  meshRef: React.RefObject<THREE.Mesh>;
 }) {
   const geometry = useLoader(STLLoader, url);
   const mesh = useMemo(() => {
@@ -142,6 +145,7 @@ function PickingGun({
 
   return (
     <mesh
+      ref={meshRef}
       geometry={mesh}
       onPointerDown={(e) => {
         if (activeTag) {
@@ -184,14 +188,11 @@ function MoldAssets({
 
   const plug = useMemo((): PlugData => {
     // Shift to match backend centroid centering
-    // The backend uses aligned.vertices -= aligned.centroid
-    // We'll calculate a similar shift based on the gun's center
     const gunBB = gun.clone();
     gunBB.computeBoundingBox();
     const gunCenter = new THREE.Vector3();
     gunBB.boundingBox!.getCenter(gunCenter);
     
-    // Use the gun's center as the global 'zero'
     const shift: [number, number, number] = [-gunCenter.x, -gunCenter.y, -gunCenter.z];
 
     const fullPrepared = full.clone();
@@ -213,7 +214,6 @@ function MoldAssets({
     gunPrepared.computeBoundingBox();
     const gunLeadingX = gunPrepared.boundingBox!.max.x;
 
-    // Get the size and center of the final prepared mold for layout and splitting
     fullPrepared.computeBoundingBox();
     const size = new THREE.Vector3();
     const center = new THREE.Vector3();
@@ -403,16 +403,12 @@ function Plug({
     if (rightGroupRef.current) rightGroupRef.current.visible = showRight;
 
     if (step === 2) {
-      // Drive the gun in far enough that its muzzle tip reaches the
-      // mold's +X face (the mold has ~15mm of Python padding past the
-      // gun, so a docked-at-origin gun would leave the tip clipped).
       const moldFrontX = plug.size.x / 2 + 0.5;
       const startX = -globalParams.totalLength * 1.1;
       const endX = moldFrontX - plug.gunLeadingX;
       const gunX = THREE.MathUtils.lerp(startX, endX, t);
       if (gunRef.current) gunRef.current.position.x = gunX;
 
-      // Plane tracks the muzzle tip 1:1.
       const muzzleWorldX = gunX + plug.gunLeadingX;
       plugClipPlane.constant = muzzleWorldX;
 
@@ -420,7 +416,6 @@ function Plug({
         scanPlaneRef.current.position.x = muzzleWorldX;
       }
 
-      // Fast pulse for active indication (phase-based for smoothness)
       phaseRef.current += delta * 10;
       const pulse = (Math.sin(phaseRef.current) + 1) / 2;
       plugMaterial.emissiveIntensity = 0.1 + pulse * 0.5;
@@ -530,12 +525,11 @@ function ClayBlock({
   useFrame(({ clock }, delta) => {
     if (!ref.current) return;
     const mat = ref.current.material as THREE.MeshStandardMaterial;
-    const target = visible ? 0.3 : 0; // Slightly more transparent
+    const target = visible ? 0.3 : 0;
     mat.opacity = THREE.MathUtils.lerp(mat.opacity, target, delta * 3);
     ref.current.visible = mat.opacity > 0.01;
 
     if (visible) {
-      // Pulsing emissive effect
       phaseRef.current += delta * 4;
       const pulse = (Math.sin(phaseRef.current) + 1) / 2;
       mat.emissiveIntensity = 0.2 + pulse * 0.4;
@@ -554,12 +548,12 @@ function ClayBlock({
       <mesh ref={ref}>
         <boxGeometry args={[w, h, d]} />
         <meshStandardMaterial
-          color="#d1d5db" // Lighter limestone/clay color
+          color="#d1d5db"
           transparent
           opacity={0}
           roughness={0.8}
           metalness={0.1}
-          emissive="#5eead4" // Teal emissive pulse
+          emissive="#5eead4"
           emissiveIntensity={0}
         />
       </mesh>
@@ -585,13 +579,49 @@ function FeatureMarker({
   coords,
   color,
   active,
+  featureId,
+  pointIndex,
+  onTagPoint,
+  targetMesh,
+  onDragStart,
+  onDragEnd,
 }: {
   coords: [number, number, number];
   color: string;
   active: boolean;
+  featureId: string;
+  pointIndex: number;
+  onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
+  targetMesh: THREE.Mesh | null;
+  onDragStart: () => void;
+  onDragEnd: () => void;
 }) {
   const ringRef = useRef<THREE.Mesh>(null);
   const pulseRef = useRef<THREE.Mesh>(null);
+  const [hovered, setHovered] = useState(false);
+  const { camera, raycaster } = useThree();
+
+  useCursor(hovered && active);
+
+  const bind = useDrag(({ active: dragging, event }) => {
+    // ALWAYS stop propagation to prevent camera movement and model clicks
+    const e = event as unknown as ThreeEvent<PointerEvent>;
+    if (e.stopPropagation) e.stopPropagation();
+
+    if (!targetMesh || !active) return;
+    
+    if (dragging) {
+      const intersects = raycaster.intersectObject(targetMesh);
+      if (intersects.length > 0) {
+        const p = intersects[0].point;
+        onTagPoint(featureId, pointIndex, [p.x, p.y, p.z]);
+      }
+      onDragStart();
+    } else {
+      onDragEnd();
+    }
+  });
+
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     if (ringRef.current) {
@@ -604,14 +634,20 @@ function FeatureMarker({
       mat.opacity = 0.55 - Math.sin(t * 2.2) * 0.25;
     }
   });
+
   return (
-    <group position={coords}>
+    <group 
+      position={coords} 
+      {...(bind() as any)} 
+      onPointerOver={() => setHovered(true)}
+      onPointerOut={() => setHovered(false)}
+    >
       <mesh>
-        <sphereGeometry args={[1.4, 16, 16]} />
-        <meshBasicMaterial color={color} />
+        <sphereGeometry args={[1.6, 16, 16]} />
+        <meshBasicMaterial color={color} transparent opacity={0.8} />
       </mesh>
       <mesh ref={pulseRef}>
-        <sphereGeometry args={[2.2, 16, 16]} />
+        <sphereGeometry args={[2.5, 16, 16]} />
         <meshBasicMaterial color={color} transparent opacity={0.35} />
       </mesh>
       <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
@@ -676,7 +712,6 @@ function ProcessingSimulation({
     []
   );
 
-  // Clone and center the geometry once to ensure stable positioning
   const centeredGun = useMemo(() => {
     const g = gun.clone();
     g.center();
@@ -687,7 +722,6 @@ function ProcessingSimulation({
     return g;
   }, [gun]);
 
-  // The block must contain the gun AND respect the user's defined length
   const effectiveBlockWidth = Math.max(globalParams.totalLength, gunSize.x);
 
   const phaseRef = useRef(0);
@@ -696,8 +730,6 @@ function ProcessingSimulation({
   useFrame(({ clock }, delta) => {
     if (!gunRef.current) return;
     
-    // Accumulate phases based on delta time and current speed
-    // This prevents jumps when realtimeProgress (and thus speed) changes.
     const speed = 0.6 + realtimeProgress * 1.5;
     phaseRef.current += delta * speed;
     
@@ -708,10 +740,8 @@ function ProcessingSimulation({
     const halfW = effectiveBlockWidth / 2;
     const scanX = THREE.MathUtils.lerp(-halfW, halfW, t);
 
-    // Position gun so its grip end is flush with the block entrance (-X)
     gunRef.current.position.x = (gunSize.x - effectiveBlockWidth) / 2;
     
-    // Clip plane remains open
     plugClipPlane.constant = 1e6;
 
     if (scanPlaneRef.current) {
@@ -720,7 +750,6 @@ function ProcessingSimulation({
       const fade = Math.sin(t * Math.PI);
       (scanPlaneRef.current.material as THREE.MeshBasicMaterial).opacity = 0.2 + fade * 0.5;
       
-      // Change laser color from teal to success-green as we finish
       (scanPlaneRef.current.material as THREE.MeshBasicMaterial).color.setHSL(
         (170 - realtimeProgress * 50) / 360, 
         0.7, 
@@ -728,7 +757,6 @@ function ProcessingSimulation({
       );
     }
 
-    // Active pulsing effect (also speeds up)
     const mat = gunRef.current.material as THREE.MeshStandardMaterial;
     const pulse = (Math.sin(pulsePhaseRef.current) + 1) / 2;
     mat.emissiveIntensity = 0.2 + pulse * 0.6;
@@ -753,7 +781,6 @@ function ProcessingSimulation({
         />
       </mesh>
 
-      {/* Laser Scanning Plane */}
       <mesh ref={scanPlaneRef} rotation={[0, Math.PI / 2, 0]}>
         <planeGeometry args={[gunSize.z * 2.5, gunSize.y * 1.5]} />
         <meshBasicMaterial
@@ -769,7 +796,7 @@ function ProcessingSimulation({
   );
 }
 
-function LoadedScene(props: SceneProps) {
+function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => void }) {
   const {
     step,
     viewMode,
@@ -784,15 +811,19 @@ function LoadedScene(props: SceneProps) {
     onSetActiveAccessory,
     globalParams,
     progress,
+    onDraggingChanged,
   } = props;
 
-  // Collect all tagged points across published+enabled features for marker rendering.
+  const gunMeshRef = useRef<THREE.Mesh>(null);
+
   const markers = useMemo(() => {
     const out: Array<{
       key: string;
       coords: [number, number, number];
       color: string;
       active: boolean;
+      featureId: string;
+      pointIndex: number;
     }> = [];
     for (const def of FEATURES) {
       if (!def.published) continue;
@@ -806,6 +837,8 @@ function LoadedScene(props: SceneProps) {
           color: def.color,
           active:
             activeTag?.featureId === def.id && activeTag.pointIndex === i,
+          featureId: def.id,
+          pointIndex: i,
         });
       });
     }
@@ -821,6 +854,7 @@ function LoadedScene(props: SceneProps) {
             activeTag={activeTag}
             onTagPoint={onTagPoint}
             gunColor={globalParams.gunColor}
+            meshRef={gunMeshRef}
           />
           <FeatureOverlays
             featureStates={featureStates}
@@ -839,7 +873,18 @@ function LoadedScene(props: SceneProps) {
 
       {step === 1.5 &&
         markers.map((m) => (
-          <FeatureMarker key={m.key} coords={m.coords} color={m.color} active={m.active} />
+          <FeatureMarker 
+            key={m.key} 
+            coords={m.coords} 
+            color={m.color} 
+            active={m.active}
+            featureId={m.featureId}
+            pointIndex={m.pointIndex}
+            onTagPoint={onTagPoint}
+            targetMesh={gunMeshRef.current}
+            onDragStart={() => onDraggingChanged(true)}
+            onDragEnd={() => onDraggingChanged(false)}
+          />
         ))}
 
       {assets && (
@@ -850,7 +895,7 @@ function LoadedScene(props: SceneProps) {
           placedAccessories={placedAccessories}
           activeAccessoryId={activeAccessoryId}
           onUpdateAccessory={onUpdateAccessory}
-          onSetActiveAccessory={onSetActiveAccessory}
+          onSelectAccessory={onSetActiveAccessory}
           globalParams={globalParams}
         />
       )}
@@ -860,6 +905,7 @@ function LoadedScene(props: SceneProps) {
 
 export function Scene(props: SceneProps) {
   const isFlat = props.viewMode === "left" || props.viewMode === "right";
+  const [isDragging, setIsDragging] = useState(false);
 
   return (
     <Canvas shadows dpr={[1, 2]} gl={{ antialias: true, localClippingEnabled: true }}>
@@ -886,16 +932,26 @@ export function Scene(props: SceneProps) {
       <pointLight position={[0, -200, 0]} intensity={0.25} color="#0c5c7a" />
 
       <Suspense fallback={null}>
-        <LoadedScene {...props} />
+        <LoadedScene {...props} onDraggingChanged={setIsDragging} />
       </Suspense>
 
       <gridHelper args={[400, 20, "#3be0c9", "#0a2a3a"]} position={[0, -40, 0]} />
       <gridHelper args={[800, 4, "#0e4a5c", "#072030"]} position={[0, -40.1, 0]} />
 
       {isFlat ? (
-        <MapControls target={[0, 0, 0]} enableRotate={false} screenSpacePanning={true} />
+        <MapControls 
+          target={[0, 0, 0]} 
+          enableRotate={false} 
+          screenSpacePanning={true} 
+          enabled={!isDragging}
+        />
       ) : (
-        <OrbitControls target={[0, 0, 0]} minDistance={100} maxDistance={800} />
+        <OrbitControls 
+          target={[0, 0, 0]} 
+          minDistance={100} 
+          maxDistance={800} 
+          enabled={!isDragging}
+        />
       )}
     </Canvas>
   );
