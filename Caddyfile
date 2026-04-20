@@ -3,9 +3,9 @@
 }
 
 llod.garage.golf {
-    # Basic Auth (Username: danny, Password: llod)
+    # Basic Auth using environment variable
     basicauth * {
-        danny "$$2a$$14$$2dyJilYGZU2Yy06f7Bs.PeRj7QNtiT5A4Zgr5IRiSa8VNvVaIX1Ke"
+        danny {env.HASHED_PASSWORD}
     }
 
     handle /api* {

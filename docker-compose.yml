@@ -5,6 +5,9 @@ services:
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      # Password: lastline
+      - HASHED_PASSWORD=$$2a$$14$$koZ37aTDnHzJHXK1A5YLMuOHHEPjz1MxD0.slwyDg6LOOvy.3WW4S
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - caddy_data:/data
