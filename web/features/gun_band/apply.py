@@ -1,18 +1,21 @@
 """Gun Band (gun_band) — voxel carver.
 
 p0 and p1 define the *leading diagonal edge* of the band.  The band
-extends `width` mm along World X (short sides parallel to X), and
-`depthZ` mm outward in Z.
+extends `width` mm along World X (short sides parallel to X).
 
-extendTop    pushes p0 backward along the edge direction.
-extendBottom pushes p1 forward along the edge direction.
+PLANAR OVERRIDE: front face is a single flat absolute Z plane
+(mean of p0.z and p1.z + depthZ). No surface texture is projected.
 
-Chamfer logic (modelled after slide_release):
-  `chamfer` applies only to the two SHORT X-parallel ends (the top cap
-  at p0 and the bottom cap at p1).  As a voxel gets closer to either
-  end than `chamfer` mm, the allowed Z depth is reduced linearly —
-  reaching zero right at the end edge.  This produces a clean 45° ramp
-  on both end corners.
+Z extents — one solid block per column:
+  Back face  : Z=0 (midplane), always flat.
+  Front face : z_front_plane (flat), chamfered near ends.
+
+Chamfer params:
+  chamfer      — length along the edge over which the ramp runs (mm).
+  chamferDepth — how far back in Z the front face drops at the tip (mm).
+                 0 = no Z drop (no chamfer effect).
+                 Equal to depthZ = full diagonal to the midplane.
+                 Values between give a shallower bevel.
 """
 
 from __future__ import annotations
@@ -32,16 +35,19 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     cavity_f = cavity_bin.astype("float32")
 
     # ── Parameters ──────────────────────────────────────────────────────────
-    width        = float(vals.get("width",        20.0))
-    depth_z      = float(vals.get("depthZ",       10.0))
-    extend_top   = float(vals.get("extendTop",     0.0))
-    extend_bot   = float(vals.get("extendBottom",  0.0))
-    offset_x     = float(vals.get("offsetX",       0.0))
-    offset_y     = float(vals.get("offsetY",       0.0))
-    chamfer      = float(vals.get("chamfer",       1.0))
-    chamfer      = min(chamfer, depth_z, width / 2.0)
+    width         = float(vals.get("width",         20.0))
+    depth_z       = float(vals.get("depthZ",        10.0))
+    extend_top    = float(vals.get("extendTop",     12.0))
+    extend_bot    = float(vals.get("extendBottom",   0.0))
+    offset_x      = float(vals.get("offsetX",        0.0))
+    offset_y      = float(vals.get("offsetY",        0.0))
+    chamfer       = float(vals.get("chamfer",        1.0))
+    chamfer_depth = float(vals.get("chamferDepth",  10.0))
+    # Clamp chamfer_depth to the total band thickness (depthZ is proud portion,
+    # but full Z thickness from midplane can be larger; cap at a safe value)
+    chamfer_depth = max(0.0, chamfer_depth)
 
-    # ── Anchor points with offset and extension ──────────────────────────────
+    # ── Anchor points with offset ────────────────────────────────────────────
     p0_raw = np.asarray(points[0], dtype=float) + np.array([offset_x, offset_y, 0.0])
     p1_raw = np.asarray(points[1], dtype=float) + np.array([offset_x, offset_y, 0.0])
 
@@ -54,42 +60,50 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
 
     edge_dir = edge_vec_raw / edge_len_raw
 
-    # Extend endpoints outward along the edge
+    # Apply extensions
     p0 = p0_raw - edge_dir * extend_top
     p1 = p1_raw + edge_dir * extend_bot
 
-    # Recompute edge with extended points
     edge_vec = p1 - p0
     edge_len = float(np.linalg.norm(edge_vec))
     edge_dir = edge_vec / edge_len
     dy_edge  = float(p1[1] - p0[1])
     dx_edge  = float(p1[0] - p0[0])
 
-    # ── Z outward direction ──────────────────────────────────────────────────
+    # ── Midplane ─────────────────────────────────────────────────────────────
     nx_v, ny_v, nz_v = cavity_f.shape
-    z_mid_world = origin[2] + (nz_v / 2.0) * pitch
+    k_mid_f = -origin[2] / pitch
+
     z_mid_pts   = (p0[2] + p1[2]) / 2.0
-    z_sign      = 1.0 if z_mid_pts >= z_mid_world else -1.0
+    is_positive = z_mid_pts >= 0.0
+    z_sign      = 1.0 if is_positive else -1.0
+
+    # ── Flat front face plane (Planar Override) ───────────────────────────────
+    z_mean        = (p0_raw[2] + p1_raw[2]) / 2.0
+    z_front_plane = z_mean + z_sign * depth_z
+    k_front_plane = (z_front_plane - origin[2]) / pitch
+
+    # The Z target at the very tip of the chamfer:
+    # drop back from the front plane by chamfer_depth (in Z, outward direction)
+    z_tip_plane = z_front_plane - z_sign * chamfer_depth
+    k_tip_plane = (z_tip_plane - origin[2]) / pitch
 
     # ── Bounding box ─────────────────────────────────────────────────────────
     x_min = min(p0[0], p1[0])
     x_max = max(p0[0], p1[0]) + width
     y_min = min(p0[1], p1[1])
     y_max = max(p0[1], p1[1])
-    z_base_world = min(p0[2], p1[2])
-    z_top_world  = z_base_world + z_sign * depth_z
 
     def world_to_i(wx): return (insertion_vox - 1) - (wx - origin[0]) / pitch
     def world_to_j(wy): return (wy - origin[1]) / pitch
-    def world_to_k(wz): return (wz - origin[2]) / pitch
 
     margin = 2
     i0 = max(0,       int(np.floor(min(world_to_i(x_min), world_to_i(x_max)))) - margin)
     i1 = min(nx_v-1,  int(np.ceil( max(world_to_i(x_min), world_to_i(x_max)))) + margin)
     j0 = max(0,       int(np.floor(world_to_j(y_min))) - margin)
     j1 = min(ny_v-1,  int(np.ceil( world_to_j(y_max))) + margin)
-    k0 = max(0,       int(np.floor(min(world_to_k(z_base_world), world_to_k(z_top_world)))) - margin)
-    k1 = min(nz_v-1,  int(np.ceil( max(world_to_k(z_base_world), world_to_k(z_top_world)))) + margin)
+    k0 = max(0,       min(int(np.floor(k_mid_f)), int(np.floor(min(k_front_plane, k_tip_plane)))) - margin)
+    k1 = min(nz_v-1,  max(int(np.ceil( k_mid_f)), int(np.ceil( max(k_front_plane, k_tip_plane)))) + margin)
 
     # ── Voxel fill loop ──────────────────────────────────────────────────────
     count = 0
@@ -100,7 +114,7 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
         for j in range(j0, j1 + 1):
             gy = origin[1] + j * pitch
 
-            # Solve s (0..1) along the leading edge from this voxel's Y (or X)
+            # Solve s (0..1) along the leading edge
             if abs(dy_edge) > 1e-6:
                 s = (gy - p0[1]) / dy_edge
             elif abs(dx_edge) > 1e-6:
@@ -111,46 +125,53 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
             if s < 0.0 or s > 1.0:
                 continue
 
-            # X of the leading edge at this s, and distance into the band
+            # X containment
             x_lead = p0[0] + s * dx_edge
             t_x = gx - x_lead
             if t_x < 0.0 or t_x > width:
                 continue
 
-            # Distance from each short end in mm along the edge
-            dist_from_p0 = s * edge_len          # 0 at p0 end, edge_len at p1
-            dist_from_p1 = (1.0 - s) * edge_len  # 0 at p1 end, edge_len at p0
-            dist_from_end = min(dist_from_p0, dist_from_p1)
-
-            # Chamfer: reduce allowed Z depth near the short ends
-            # Same approach as slide_release — pull back the depth linearly
-            local_depth = depth_z
+            # Chamfer: interpolate front face from k_front_plane to k_tip_plane
+            dist_from_end = min(s, 1.0 - s) * edge_len
             if chamfer > 0 and dist_from_end < chamfer:
-                local_depth = depth_z * (dist_from_end / chamfer)
+                tc = dist_from_end / chamfer       # 0 at tip, 1 at full
+                k_front_f = k_tip_plane + tc * (k_front_plane - k_tip_plane)
+            else:
+                k_front_f = k_front_plane
 
-            if local_depth <= 0.0:
+            # Back face always flat at midplane
+            k_back_f = k_mid_f
+
+            # Skip if no thickness
+            if is_positive and k_front_f <= k_back_f:
+                continue
+            if not is_positive and k_front_f >= k_back_f:
                 continue
 
-            # Z containment using the local (possibly reduced) depth
-            z_surf = p0[2] + s * (p1[2] - p0[2])
-
-            for k in range(k0, k1 + 1):
-                gz = origin[2] + k * pitch
-                t_z = (gz - z_surf) * z_sign   # 0 at surface → depth_z at top
-
-                if t_z < 0.0 or t_z > local_depth:
-                    continue
-
-                if cavity_f[i, j, k] < 1.0:
-                    cavity_f[i, j, k] = 1.0
-                    count += 1
+            # Fill solid from midplane to front face
+            if is_positive:
+                for k in range(max(int(np.floor(k_back_f)), k0),
+                               min(int(np.ceil(k_front_f)) + 1, nz_v)):
+                    if k < k_back_f or k > k_front_f:
+                        continue
+                    if cavity_f[i, j, k] < 1.0:
+                        cavity_f[i, j, k] = 1.0
+                        count += 1
+            else:
+                for k in range(max(int(np.floor(k_front_f)), k0),
+                               min(int(np.ceil(k_back_f)) + 1, nz_v)):
+                    if k > k_back_f or k < k_front_f:
+                        continue
+                    if cavity_f[i, j, k] < 1.0:
+                        cavity_f[i, j, k] = 1.0
+                        count += 1
 
     if console:
         console.print(
             f"[teal]gun_band[/teal]: filled {count:,} voxels  "
             f"(width={width}mm  depthZ={depth_z}mm  "
-            f"extTop={extend_top}mm  extBot={extend_bot}mm  "
-            f"chamfer={chamfer}mm)"
+            f"chamfer={chamfer}mm  chamferDepth={chamfer_depth}mm  "
+            f"side={'pos' if is_positive else 'neg'})"
         )
 
     return cavity_f, origin
