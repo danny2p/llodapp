@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import * as THREE from "three";
 import type { FeatureOverlayProps } from "@/lib/features";
 
@@ -17,8 +18,11 @@ export default function Overlay({ def, state, flf }: FeatureOverlayProps) {
   const w = widthY;
   const d = depthZ;
   const c = chamfer;
-  const isPos = anchor[2] > 0;
-  const zSign = isPos ? 1 : -1;
+  // Feature extends in local +X (toward entrance in HAS). The anchor's world Z
+  // tells us which side of the gun the slot sits on; invert sign because
+  // HAS_DEFAULT_R maps local +Z to world -Z.
+  const worldZSign = anchor[2] > 0 ? 1 : -1;
+  const zSign = -worldZSign;
 
   const profile = [
     { y: -w / 2, z: 0 },
@@ -57,11 +61,24 @@ export default function Overlay({ def, state, flf }: FeatureOverlayProps) {
   geometry.setIndex(indices);
   geometry.computeVertexNormals();
 
+  const quaternion = useMemo(() => {
+    const m = new THREE.Matrix4();
+    m.set(
+      flf.R[0][0], flf.R[0][1], flf.R[0][2], 0,
+      flf.R[1][0], flf.R[1][1], flf.R[1][2], 0,
+      flf.R[2][0], flf.R[2][1], flf.R[2][2], 0,
+      0, 0, 0, 1,
+    );
+    return new THREE.Quaternion().setFromRotationMatrix(m);
+  }, [flf.R]);
+
   return (
-    <group position={[flf.origin[0], flf.origin[1] + yOffset, flf.origin[2]]}>
-      <mesh geometry={geometry}>
-        <meshBasicMaterial color={def.color} transparent opacity={0.3} wireframe />
-      </mesh>
+    <group position={flf.origin} quaternion={quaternion}>
+      <group position={[0, yOffset, 0]}>
+        <mesh geometry={geometry}>
+          <meshBasicMaterial color={def.color} transparent opacity={0.3} wireframe />
+        </mesh>
+      </group>
     </group>
   );
 }

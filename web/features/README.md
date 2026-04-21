@@ -19,22 +19,24 @@ Always use the shared FLF logic to anchor your geometry.
 - **In Python:** `from features_frame import flf_from_points`.
 - **In React:** Component receives `flf` prop automatically.
 
-### 2. The X-Axis Flip (CRITICAL)
-The core mold-maker pipeline "sweeps" the gun silhouette. This process **reverses the X-axis** in the voxel grid.
+### 2. HAS (Holster-Aligned System)
+The entire pipeline — viewer, carver, and voxel grid — shares one coordinate system.
 
-#### Global Frame (Aligned):
+#### Global Frame:
 - **Muzzle:** +X (Higher world coordinates).
 - **Holster Entrance (Grip):** -X (Lower world coordinates).
-- **Voxel Index 0:** Grip side (Entrance).
-- **Voxel Index high:** Muzzle side.
+- **Top of Slide:** +Y.
+- **Gun Center:** world origin [0, 0, 0].
+- **Voxel Index 0:** Entrance (-X end, lowest X).
+- **Voxel Index (nx-1):** Muzzle (+X end, highest X).
 
-#### Conversion Math:
+#### Conversion Math (linear, forward):
 ```python
-# SWEPT INDEX i -> WORLD X
-world_x = origin[0] + (insertion_vox - 1 - i) * pitch
+# GRID INDEX i -> WORLD X
+world_x = origin[0] + i * pitch
 
-# WORLD X -> SWEPT INDEX i
-i = (insertion_vox - 1) - (world_x - origin[0]) / pitch
+# WORLD X -> GRID INDEX i
+i = (world_x - origin[0]) / pitch
 ```
 
 ### 3. Sub-Voxel Precision

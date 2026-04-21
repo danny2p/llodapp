@@ -169,7 +169,8 @@ def rotate_around_z(mesh: trimesh.Trimesh, degrees: float) -> trimesh.Trimesh:
     return out
 
 
-def orient_muzzle_low(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+def orient_muzzle_high(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
+    """HAS Standard: Muzzle must be at HIGH X (+X)."""
     xs = mesh.vertices[:, 0]
     x_min, x_max = xs.min(), xs.max()
     span = x_max - x_min
@@ -177,13 +178,11 @@ def orient_muzzle_low(mesh: trimesh.Trimesh) -> trimesh.Trimesh:
     head = mesh.vertices[xs < x_min + 0.1 * span]
     tail = mesh.vertices[xs > x_max - 0.1 * span]
     # Handguns are 'blunter' at the back (grip/hammer) and 'smaller' at the muzzle.
-    # We compare the cross-sectional area of the first 10% vs last 10%.
     head_area = (head[:, 1:].max(0) - head[:, 1:].min(0)).prod()
     tail_area = (tail[:, 1:].max(0) - tail[:, 1:].min(0)).prod()
     
-    if head_area > tail_area:
-        # Muzzle is currently at high X. Rotate 180 around Y to point it to low X.
-        # This flips both X and Z, which preserves vertical (Y) orientation.
+    if head_area < tail_area:
+        # Muzzle is currently at low X. Rotate 180 around Y to point it to HIGH X.
         v = mesh.vertices.copy()
         v[:, 0] = -v[:, 0]
         v[:, 2] = -v[:, 2]
@@ -226,12 +225,7 @@ def make_axis_gizmos(length_mm: float = 80.0, thickness_mm: float = 3.0) -> trim
 
 def voxelize_sdf(mesh: trimesh.Trimesh, pitch: float, band: int = 3
                  ) -> tuple[np.ndarray, np.ndarray]:
-    """True mesh signed-distance field via Open3D RaycastingScene.
-
-    Returns a float32 grid (positive outside mesh, negative inside) and the
-    world-space origin of voxel [0,0,0]. Narrow band: exact mm-distance
-    within `band` voxels of the surface; ±band*pitch constants elsewhere.
-    Narrow band keeps the raycast 10-30x faster than full-grid evaluation."""
+    """True mesh signed-distance field via Open3D RaycastingScene."""
     from scipy.ndimage import binary_fill_holes, distance_transform_edt
 
     tm = o3d.geometry.TriangleMesh(
@@ -252,9 +246,6 @@ def voxelize_sdf(mesh: trimesh.Trimesh, pitch: float, band: int = 3
     o3d_origin = np.asarray(vg.origin, dtype=float)
     origin = o3d_origin + (np.asarray(i_min, dtype=float) + 0.5) * pitch
 
-    # Narrow band: voxels within `band` voxel-hops of the occupancy surface.
-    # distance_transform_edt(mask) returns 0 inside mask, distance-to-mask
-    # outside — so use each EDT only on its own side.
     dist_in  = distance_transform_edt(occ)
     dist_out = distance_transform_edt(~occ)
     dist_to_surface = np.where(occ, dist_in, dist_out)
@@ -272,15 +263,25 @@ def voxelize_sdf(mesh: trimesh.Trimesh, pitch: float, band: int = 3
 
 
 def sweep_cavity_sdf(gun_sdf: np.ndarray, insertion_depth_vox: int) -> np.ndarray:
-    """SDF analog of the boolean sweep. Running min along +X matches the
-    running OR on occupancy: min(SDFs) approximates SDF of the union, and
-    is exact at the zero-crossing where MC actually samples. Negative =
-    inside the swept cavity."""
+    """Generate the cavity by sweeping the gun muzzle-first.
+    
+    HAS Standard: 
+    - Input gun_sdf has Muzzle at HIGH X.
+    - Output cavity_sdf has Entrance at index 0 and Muzzle Floor at high index.
+    """
     gun_len = gun_sdf.shape[0]
     limit = min(gun_len, insertion_depth_vox)
-    cum = np.minimum.accumulate(gun_sdf[:limit], axis=0)
-    idx = np.minimum(np.arange(insertion_depth_vox - 1, -1, -1), limit - 1)
-    return cum[idx].astype(np.float32)
+    
+    # We want swept[i] to be the union of gun[i] through gun[max] (Muzzle-first sweep)
+    # This is a 'suffix min'.
+    # Suffix min(x) = Prefix min(reverse(x)) then reverse back.
+    flipped = gun_sdf[:limit][::-1]
+    cum = np.minimum.accumulate(flipped, axis=0)
+    swept = cum[::-1]
+    
+    # Pad or trim to the requested insertion depth
+    idx = np.minimum(np.arange(insertion_depth_vox), limit - 1)
+    return swept[idx].astype(np.float32)
 
 
 def cavity_to_mesh(cavity_sdf: np.ndarray, origin: np.ndarray, pitch: float,
@@ -317,8 +318,8 @@ def _hash_file(path: Path) -> str:
 
 def _cache_key(input_path: Path, voxel_pitch: float, rotate_z_deg: float, mirror: bool, total_length: float) -> str:
     mir = "1" if mirror else "0"
-    # v2: cavity stored as float32 SDF instead of bool; invalidates v1 entries.
-    return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}_l{total_length}_sdfv2"
+    # has1: HAS migration — cavity origin/sweep convention now muzzle=+X, entrance=index 0.
+    return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}_l{total_length}_has1"
 
 
 def _load_prep_cache(cache_base: Path, key: str):
@@ -330,14 +331,15 @@ def _load_prep_cache(cache_base: Path, key: str):
     cavity_sdf = data["cavity_sdf"]
     origin = data["origin"]
     insertion_vox = int(meta["insertion_vox"])
+    physical_muzzle_i = int(meta.get("physical_muzzle_i", 0))
     tg = meta.get("tg")
     if tg is not None:
         tg = {k: (np.asarray(v) if isinstance(v, list) else v) for k, v in tg.items()}
     aligned = trimesh.load_mesh(entry / "aligned.stl", process=True)
-    return aligned, cavity_sdf, origin, insertion_vox, tg
+    return aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i
 
 
-def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, insertion_vox, tg) -> None:
+def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i: int) -> None:
     entry = cache_base / key
     entry.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(entry / "grids.npz", cavity_sdf=cavity_sdf, origin=origin)
@@ -346,6 +348,7 @@ def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, in
         tg_json = {k: (v.tolist() if hasattr(v, "tolist") else v) for k, v in tg.items()}
     (entry / "meta.json").write_text(json.dumps({
         "insertion_vox": insertion_vox,
+        "physical_muzzle_i": physical_muzzle_i,
         "tg": tg_json,
     }))
     aligned.export(entry / "aligned.stl")
@@ -419,7 +422,7 @@ def main() -> None:
     if cached is not None:
         emit_progress(0.60, "prep cache hit :: loading grids")
         console.rule("Prep cache hit")
-        aligned, cavity_sdf, origin, insertion_vox, tg = cached
+        aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i = cached
         console.print(f"key: {cache_key}  ({cache_base})")
         console.print(f"aligned: {len(aligned.faces):,} faces; cavity_sdf: {cavity_sdf.shape}; tg: {'yes' if tg else 'no'}")
     else:
@@ -453,9 +456,13 @@ def main() -> None:
             aligned = trimesh.Trimesh(vertices=v, faces=faces, process=True)
             aligned.merge_vertices()
 
-        aligned = orient_muzzle_low(aligned)
+        aligned = orient_muzzle_high(aligned)
         aligned = normalize_y_orientation(aligned, console)
-        console.print(f"after orientation normalization: bbox {aligned.bounds[1] - aligned.bounds[0]}")
+        
+        # HAS Standard: Center the bounding box at [0,0,0]
+        bb_center = (aligned.bounds[1] + aligned.bounds[0]) / 2.0
+        aligned.apply_translation(-bb_center)
+        console.print(f"after orientation normalization & centering: bbox {aligned.bounds[1] - aligned.bounds[0]}")
 
         emit_progress(0.35, "voxelizing mesh to SDF")
         console.rule("Voxelize + sweep")
@@ -470,18 +477,46 @@ def main() -> None:
         gun_sdf = np.pad(gun_sdf, ((pad_vox, pad_vox),) * 3, mode="constant", constant_values=outside_val)
         origin -= pad_vox * args.voxel_pitch
 
-        occupancy = gun_sdf < 0
-        console.print(f"voxel grid: {gun_sdf.shape}, {int(occupancy.sum()):,} inside")
+        # Detect physical muzzle before the sweep/padding
+        physical_occupancy = gun_sdf < 0
+        phys_occupied_i = np.where(physical_occupancy.any(axis=(1, 2)))[0]
         
+        # Muzzle is at MAX i in the gun_sdf (due to orient_muzzle_high)
+        muzzle_vox = int(phys_occupied_i.max()) if len(phys_occupied_i) > 0 else 0
+
         emit_progress(0.50, "computing swept cavity volume")
         insertion_vox = int(round(args.total_length / args.voxel_pitch))
-        cavity_sdf = sweep_cavity_sdf(gun_sdf, insertion_vox)
+        
+        # SLICING:
+        # We want the mold to represent the space from Entrance to Muzzle Floor + Pad.
+        # Total length requested is 'insertion_vox'.
+        # The 'end' of our model should be (muzzle_vox + pad).
+        # The 'start' should be (end - insertion_vox).
+        end = min(gun_sdf.shape[0], muzzle_vox + pad_vox + 1)
+        start = end - insertion_vox
+        slice_start = max(0, start)
+        pad_entrance = max(0, -start)
+        
+        sliced_gun = gun_sdf[slice_start:end]
+        if pad_entrance > 0:
+            sliced_gun = np.pad(sliced_gun, ((pad_entrance, 0), (0, 0), (0, 0)), mode='edge')
+            
+        cavity_sdf = sweep_cavity_sdf(sliced_gun, insertion_vox)
+        
+        # IMPORTANT: Shift origin to match the slice
+        cavity_origin = origin.copy()
+        cavity_origin[0] += (slice_start - pad_entrance) * args.voxel_pitch
 
         emit_progress(0.55, "detecting trigger guard anchors")
-        tg = detect_trigger_guard(occupancy, origin, args.voxel_pitch, console)
+        occupancy = cavity_sdf < 0
+        tg = detect_trigger_guard(occupancy, cavity_origin, args.voxel_pitch, console)
+        
+        # In this slice, the physical muzzle is exactly at (muzzle_vox - slice_start + pad_entrance)
+        physical_muzzle_i = muzzle_vox - slice_start + pad_entrance
+        context = {"tg": tg, "physical_muzzle_i": physical_muzzle_i}
 
         if not args.no_cache:
-            _save_prep_cache(cache_base, cache_key, aligned, cavity_sdf, origin, insertion_vox, tg)
+            _save_prep_cache(cache_base, cache_key, aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i)
             console.print(f"cached prep under {cache_key}")
 
     aligned_out = out_dir / f"{stem}_mabr_aligned{suffix}.stl"
@@ -497,7 +532,7 @@ def main() -> None:
             aligned.export(gun_dec_out)
         console.print(f"wrote {gun_dec_out.name} (target {args.gun_decim_target})")
 
-    cavity_origin = origin
+    # Features use the origin established during prep
     console.rule("Features")
 
     if tg is not None:
@@ -522,7 +557,7 @@ def main() -> None:
     # stair-steps on angled surfaces.
     original_cavity_bin = (cavity_sdf < 0).astype(np.float32)
     cavity_bin = original_cavity_bin.copy()
-    context = {"tg": tg}
+    context = {"tg": tg, "physical_muzzle_i": physical_muzzle_i}
     
     enabled_fids = [fid for fid, state in features_state.items() if state.get("enabled")]
     

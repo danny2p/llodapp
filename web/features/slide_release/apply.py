@@ -1,6 +1,6 @@
 """Slide-release clearance-channel carver.
 
-Carves a channel from the tagged point toward the holster entrance (+X).
+Carves a channel from the tagged point toward the holster entrance (local +X).
 Matches overlay.tsx geometry.
 """
 
@@ -20,7 +20,9 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     nx, ny, nz = cavity_bin.shape
     cavity_f = cavity_bin.astype("float32")
 
-    i_start = int((insertion_vox - 1) - round((sr_coords[0] - origin[0]) / pitch))
+    # Linear HAS mapping: anchor voxel X is just (anchor_x - origin_x) / pitch.
+    # Channel extends from the anchor toward the entrance (i decreasing).
+    i_start = int(round((sr_coords[0] - origin[0]) / pitch))
     j_c = int(round((sr_coords[1] + y_offset_mm - origin[1]) / pitch))
     k_tag_vox = (sr_coords[2] - origin[2]) / pitch
 
@@ -34,8 +36,9 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     target_z_world = sr_coords[2] + (depth_z_mm if is_positive_side else -depth_z_mm)
     target_k_vox = (target_z_world - origin[2]) / pitch
 
-    for i in range(0, i_start + 1):
-        x_dist_mm = (i_start - i) * pitch
+    i_lo = max(0, min(i_start, nx - 1))
+    for i in range(0, i_lo + 1):
+        x_dist_mm = (i_lo - i) * pitch
         for j in range(j0, j1 + 1):
             y_dist_mm = half_w_mm - abs(j - j_c) * pitch
             min_dist_edge = min(max(0, x_dist_mm), max(0, y_dist_mm))

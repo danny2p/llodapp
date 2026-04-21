@@ -18,7 +18,7 @@ import {
   type FeatureStates,
   type GlobalParams,
 } from "@/lib/features";
-import { flfFromPoints, type Vec3 } from "@/lib/featuresFrame";
+import { flfFromPoints, HAS_DEFAULT_R, type Vec3 } from "@/lib/featuresFrame";
 
 export type Step = 1 | 1.5 | 2 | 3;
 export type ViewMode = "unified" | "left" | "right";
@@ -72,10 +72,12 @@ function FeatureOverlays({
   featureStates,
   globalParams,
   muzzleX = 0,
+  gunTopY = 0,
 }: {
   featureStates: FeatureStates;
   globalParams: GlobalParams;
   muzzleX?: number;
+  gunTopY?: number;
 }) {
   return (
     <group>
@@ -88,13 +90,13 @@ function FeatureOverlays({
         // For tagged features, derive frame from points.
         let flf = flfFromPoints(state.points);
         if (!flf && def.points.length === 0) {
+          // Additive features like sight_channel auto-anchor to the gun's top Y
+          // so their top edge lands on the slide. Non-additive automatic features
+          // stay at Y=0 and can offset as needed.
+          const anchorY = def.intent === "additive" ? gunTopY : 0;
           flf = {
-            origin: [muzzleX, 0, 0],
-            R: [
-              [1, 0, 0],
-              [0, 1, 0],
-              [0, 0, 1],
-            ],
+            origin: [muzzleX, anchorY, 0],
+            R: HAS_DEFAULT_R,
           };
         }
 
@@ -139,7 +141,7 @@ function PickingGun({
   onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
   gunColor: string;
   meshRef: React.RefObject<THREE.Mesh | null>;
-  onLoad?: (size: THREE.Vector3, center: THREE.Vector3) => void;
+  onLoad?: (size: THREE.Vector3, center: THREE.Vector3, slideTopY: number) => void;
 }) {
   const geometry = useLoader(STLLoader, url);
   const meshData = useMemo(() => {
@@ -150,11 +152,34 @@ function PickingGun({
     const center = new THREE.Vector3();
     g.boundingBox!.getSize(size);
     g.boundingBox!.getCenter(center);
-    return { geometry: g, size, center };
+
+    // Robust slide top detection: bin all vertex Y values and pick the
+    // highest bin that still contains a meaningful chunk of the mesh.
+    // Iron sights rise above the slide but contain only a tiny vertex share,
+    // so a simple count threshold excludes them.
+    const pos = g.attributes.position as THREE.BufferAttribute;
+    const count = pos.count;
+    const bin = 1.0; // 1mm bins
+    const bins = new Map<number, number>();
+    for (let i = 0; i < count; i++) {
+      const y = pos.getY(i);
+      const b = Math.floor(y / bin);
+      bins.set(b, (bins.get(b) ?? 0) + 1);
+    }
+    const threshold = count * 0.01; // 1% of vertices must share this band
+    let slideTopBin = -Infinity;
+    for (const [b, c] of bins) {
+      if (c >= threshold && b > slideTopBin) slideTopBin = b;
+    }
+    const slideTopY = Number.isFinite(slideTopBin)
+      ? (slideTopBin + 1) * bin
+      : center.y + size.y / 2;
+
+    return { geometry: g, size, center, slideTopY };
   }, [geometry]);
 
   useEffect(() => {
-    if (onLoad) onLoad(meshData.size, meshData.center);
+    if (onLoad) onLoad(meshData.size, meshData.center, meshData.slideTopY);
   }, [meshData, onLoad]);
 
   return (
@@ -201,29 +226,17 @@ function MoldAssets({
   ]);
 
   const plug = useMemo((): PlugData => {
-    // Shift to match backend centroid centering
-    const gunBB = gun.clone();
-    gunBB.computeBoundingBox();
-    const gunCenter = new THREE.Vector3();
-    gunBB.boundingBox!.getCenter(gunCenter);
-    
-    const shift: [number, number, number] = [-gunCenter.x, -gunCenter.y, -gunCenter.z];
-
+    // HAS: backend delivers gun centered at origin with muzzle at +X; no reshaping needed.
     const fullPrepared = full.clone();
-    fullPrepared.translate(...shift);
     fullPrepared.computeVertexNormals();
 
     const leftPrepared = left.clone();
-    leftPrepared.translate(...shift);
     leftPrepared.computeVertexNormals();
 
     const rightPrepared = right.clone();
-    rightPrepared.translate(...shift);
     rightPrepared.computeVertexNormals();
 
     const gunPrepared = gun.clone();
-    gunPrepared.translate(...shift);
-    gunPrepared.rotateY(Math.PI);
     gunPrepared.computeVertexNormals();
     gunPrepared.computeBoundingBox();
     const gunLeadingX = gunPrepared.boundingBox!.max.x;
@@ -710,6 +723,63 @@ function FeatureMarker({
   );
 }
 
+function BboxDebugLabels({ bounds }: { bounds: { size: THREE.Vector3; center: THREE.Vector3; slideTopY: number } }) {
+  const { size, center, slideTopY } = bounds;
+  const frontX = center.x + size.x / 2;
+  const rearX  = center.x - size.x / 2;
+  const bboxTopY = center.y + size.y / 2;
+  const topY   = slideTopY;
+  const midY   = center.y;
+  const midX   = center.x;
+
+  const labelClass =
+    "px-2 py-1 whitespace-nowrap font-mono text-[11px] uppercase tracking-widest border bg-black/70 text-white pointer-events-none";
+
+  return (
+    <group>
+      <mesh position={[frontX, topY, 0]}>
+        <sphereGeometry args={[2.5, 16, 16]} />
+        <meshBasicMaterial color="#f59e0b" />
+        <Html position={[0, 8, 0]} center distanceFactor={160}>
+          <div className={`${labelClass} border-amber-400 text-amber-200`}>
+            FRONT (+X) {frontX.toFixed(1)}
+          </div>
+        </Html>
+      </mesh>
+
+      <mesh position={[rearX, topY, 0]}>
+        <sphereGeometry args={[2.5, 16, 16]} />
+        <meshBasicMaterial color="#ef4444" />
+        <Html position={[0, 8, 0]} center distanceFactor={160}>
+          <div className={`${labelClass} border-red-400 text-red-200`}>
+            REAR (-X) {rearX.toFixed(1)}
+          </div>
+        </Html>
+      </mesh>
+
+      <mesh position={[midX, topY, 0]}>
+        <sphereGeometry args={[2.5, 16, 16]} />
+        <meshBasicMaterial color="#5eead4" />
+        <Html position={[0, 8, 0]} center distanceFactor={160}>
+          <div className={`${labelClass} border-teal-300 text-teal-200`}>
+            SLIDE TOP {topY.toFixed(1)}
+          </div>
+        </Html>
+      </mesh>
+
+      <mesh position={[midX, bboxTopY, 0]}>
+        <sphereGeometry args={[2.0, 16, 16]} />
+        <meshBasicMaterial color="#a78bfa" />
+        <Html position={[0, 8, 0]} center distanceFactor={160}>
+          <div className={`${labelClass} border-violet-400 text-violet-200`}>
+            BBOX TOP {bboxTopY.toFixed(1)}
+          </div>
+        </Html>
+      </mesh>
+    </group>
+  );
+}
+
 function CameraController({ isFlat }: { isFlat: boolean }) {
   const { camera, controls } = useThree();
   const lastIsFlat = useRef(isFlat);
@@ -814,7 +884,7 @@ function ProcessingSimulation({
         totalLength={effectiveBlockWidth}
       />
 
-      <mesh ref={gunRef} geometry={centeredGun} rotation={[0, Math.PI, 0]}>
+      <mesh ref={gunRef} geometry={centeredGun}>
         <meshStandardMaterial
           color={globalParams.gunColor}
           metalness={0.6}
@@ -859,12 +929,17 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
   } = props;
 
   const gunMeshRef = useRef<THREE.Mesh>(null);
-  const [gunBounds, setGunBounds] = useState<{ size: THREE.Vector3, center: THREE.Vector3 } | null>(null);
+  const [gunBounds, setGunBounds] = useState<{ size: THREE.Vector3, center: THREE.Vector3, slideTopY: number } | null>(null);
 
-  const handleGunLoad = useCallback((size: THREE.Vector3, center: THREE.Vector3) => {
+  const handleGunLoad = useCallback((size: THREE.Vector3, center: THREE.Vector3, slideTopY: number) => {
     setGunBounds((prev) => {
-      if (prev && prev.size.equals(size) && prev.center.equals(center)) return prev;
-      return { size, center };
+      if (
+        prev &&
+        prev.size.equals(size) &&
+        prev.center.equals(center) &&
+        prev.slideTopY === slideTopY
+      ) return prev;
+      return { size, center, slideTopY };
     });
   }, []);
 
@@ -899,10 +974,15 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
 
   const gunMuzzleX = useMemo(() => {
     if (gunBounds) {
-      // Muzzle is at -X in the unrotated tagging mesh
-      return gunBounds.center.x - gunBounds.size.x / 2;
+      // HAS: muzzle is at +X (bounding box max).
+      return gunBounds.center.x + gunBounds.size.x / 2;
     }
-    return -80; 
+    return 80;
+  }, [gunBounds]);
+
+  const gunTopY = useMemo(() => {
+    if (gunBounds) return gunBounds.slideTopY;
+    return 0;
   }, [gunBounds]);
 
   return (
@@ -921,16 +1001,19 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
             featureStates={featureStates}
             globalParams={globalParams}
             muzzleX={gunMuzzleX}
+            gunTopY={gunTopY}
           />
           
-          {/* Visual indicator for Total Length (Insertion Depth) */}
-          <mesh 
-            position={[gunMuzzleX + globalParams.totalLength, gunBounds?.center.y ?? 0, 0]} 
+          {/* Visual indicator for Total Length (Insertion Depth) — entrance plane at -X side of the mold. */}
+          <mesh
+            position={[gunMuzzleX - globalParams.totalLength, gunBounds?.center.y ?? 0, 0]}
             rotation={[0, Math.PI / 2, 0]}
           >
             <planeGeometry args={[100, 100]} />
             <meshBasicMaterial color="#ef4444" transparent opacity={0.2} side={THREE.DoubleSide} />
           </mesh>
+
+          {gunBounds && <BboxDebugLabels bounds={gunBounds} />}
         </>
       )}
 

@@ -74,10 +74,10 @@ export default function Overlay({ def, state, flf }: FeatureOverlayProps) {
       new THREE.Vector3(surfPt.x + x, surfPt.y, z);
 
     strip.push({
-      leadBack:   mk(0,     zBack),
-      leadFront:  mk(0,     zFrontLocal),
-      trailBack:  mk(width, zBack),
-      trailFront: mk(width, zFrontLocal),
+      leadBack:   mk(0,      zBack),
+      leadFront:  mk(0,      zFrontLocal),
+      trailBack:  mk(-width, zBack),
+      trailFront: mk(-width, zFrontLocal),
     });
   }
 

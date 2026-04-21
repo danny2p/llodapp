@@ -14,42 +14,51 @@ export default function SlideCirclesOverlay({ def, state, flf }: FeatureOverlayP
   const anchor = state.points[0];
   if (!anchor) return null;
 
-  const isPos = anchor[2] > 0;
-  const zSign = isPos ? 1 : -1;
+  // In HAS, local +Z maps to world -Z via HAS_DEFAULT_R, so flip zSign from
+  // the anchor's world-side hint to push cylinders outward from the gun.
+  const worldZSign = anchor[2] > 0 ? 1 : -1;
+  const zSign = -worldZSign;
 
-  // We'll create 3 pairs of nested cylinders
   const circlePositions = [0, spacing, 2 * spacing];
 
+  const quaternion = useMemo(() => {
+    const m = new THREE.Matrix4();
+    m.set(
+      flf.R[0][0], flf.R[0][1], flf.R[0][2], 0,
+      flf.R[1][0], flf.R[1][1], flf.R[1][2], 0,
+      flf.R[2][0], flf.R[2][1], flf.R[2][2], 0,
+      0, 0, 0, 1,
+    );
+    return new THREE.Quaternion().setFromRotationMatrix(m);
+  }, [flf.R]);
+
   return (
-    <group
-      position={flf.origin}
-      rotation={[0, 0, (rz * Math.PI) / 180]}
-    >
-      {circlePositions.map((x, idx) => (
-        <group key={idx} position={[x, 0, 0]}>
-          {/* Outer Boss Cylinder */}
-          <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, (height / 2) * zSign]}>
-            <cylinderGeometry args={[outerDia / 2, outerDia / 2, height, 32]} />
-            <meshBasicMaterial
-              color={def.color}
-              transparent
-              opacity={0.3}
-              wireframe
-            />
-          </mesh>
-          
-          {/* Inner Protruding Pin (1mm taller) */}
-          <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, ((height + 1) / 2) * zSign]}>
-            <cylinderGeometry args={[innerDia / 2, innerDia / 2, height + 1, 32]} />
-            <meshBasicMaterial
-              color={def.color}
-              transparent
-              opacity={0.6}
-              wireframe
-            />
-          </mesh>
-        </group>
-      ))}
+    <group position={flf.origin} quaternion={quaternion}>
+      <group rotation={[0, 0, (rz * Math.PI) / 180]}>
+        {circlePositions.map((x, idx) => (
+          <group key={idx} position={[x, 0, 0]}>
+            <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, (height / 2) * zSign]}>
+              <cylinderGeometry args={[outerDia / 2, outerDia / 2, height, 32]} />
+              <meshBasicMaterial
+                color={def.color}
+                transparent
+                opacity={0.3}
+                wireframe
+              />
+            </mesh>
+
+            <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, ((height + 1) / 2) * zSign]}>
+              <cylinderGeometry args={[innerDia / 2, innerDia / 2, height + 1, 32]} />
+              <meshBasicMaterial
+                color={def.color}
+                transparent
+                opacity={0.6}
+                wireframe
+              />
+            </mesh>
+          </group>
+        ))}
+      </group>
     </group>
   );
 }

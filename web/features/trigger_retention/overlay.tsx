@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import * as THREE from "three";
 import type { FeatureOverlayProps } from "@/lib/features";
 
@@ -65,18 +66,27 @@ export default function Overlay({ def, state, flf }: FeatureOverlayProps) {
   );
   geometry.setIndex(indices);
 
+  const quaternion = useMemo(() => {
+    const m = new THREE.Matrix4();
+    m.set(
+      flf.R[0][0], flf.R[0][1], flf.R[0][2], 0,
+      flf.R[1][0], flf.R[1][1], flf.R[1][2], 0,
+      flf.R[2][0], flf.R[2][1], flf.R[2][2], 0,
+      0, 0, 0, 1,
+    );
+    return new THREE.Quaternion().setFromRotationMatrix(m);
+  }, [flf.R]);
+
   return (
-    <group
-      position={[
-        flf.origin[0] + frontOffset,
-        flf.origin[1] + yOffset,
-        flf.origin[2],
-      ]}
-      rotation={[0, 0, (rotateZDeg * Math.PI) / 180]}
-    >
-      <mesh geometry={geometry}>
-        <meshBasicMaterial color={def.color} transparent opacity={0.3} wireframe />
-      </mesh>
+    <group position={flf.origin} quaternion={quaternion}>
+      <group
+        position={[frontOffset, yOffset, 0]}
+        rotation={[0, 0, (rotateZDeg * Math.PI) / 180]}
+      >
+        <mesh geometry={geometry}>
+          <meshBasicMaterial color={def.color} transparent opacity={0.3} wireframe />
+        </mesh>
+      </group>
     </group>
   );
 }

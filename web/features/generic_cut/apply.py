@@ -43,25 +43,22 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     # Use a safe radius for AABB clipping
     radius = np.sqrt(w**2 + h**2 + d**2) / 2.0
     
-    # MAPPING TO SWEPT GRID INDICES:
-    # World X of index i is: gx = origin[0] + (insertion_vox - 1 - i) * pitch
-    # So index i = (insertion_vox - 1) - (gx - origin[0]) / pitch
-    i_c = int(round((insertion_vox - 1) - (world_center[0] - origin[0]) / pitch))
+    # HAS linear mapping: gx = origin[0] + i * pitch
+    i_c = int(round((world_center[0] - origin[0]) / pitch))
     j_c = int(round((world_center[1] - origin[1]) / pitch))
     k_c = int(round((world_center[2] - origin[2]) / pitch))
     r_vox = int(np.ceil(radius / pitch)) + 2
-    
+
     i0, i1 = max(0, i_c - r_vox), min(nx - 1, i_c + r_vox)
     j0, j1 = max(0, j_c - r_vox), min(ny - 1, j_c + r_vox)
     k0, k1 = max(0, k_c - r_vox), min(nz - 1, k_c + r_vox)
-    
+
     # 4. Carving Loop
     half_w, half_h, half_d = w/2.0, h/2.0, d/2.0
 
     count = 0
     for i in range(i0, i1 + 1):
-        # Reverse mapping: swept index i -> World X
-        gx = origin[0] + (insertion_vox - 1 - i) * pitch
+        gx = origin[0] + i * pitch
         
         for j in range(j0, j1 + 1):
             gy = origin[1] + j * pitch

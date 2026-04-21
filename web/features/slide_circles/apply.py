@@ -5,7 +5,8 @@ Optimized for high-speed voxel processing.
 """
 
 import numpy as np
-from features_frame import rot_z
+
+from features_frame import flf_from_points, rot_z
 
 def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     nx, ny, nz = cavity_bin.shape
@@ -19,28 +20,18 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     height = float(vals.get("height", 6.0))
     rz_deg = float(vals.get("rotateZ", 0.0))
     
-    # 2. Setup Coordinate Math
+    # 2. Setup Coordinate Math via FLF (local +X → entrance in HAS)
     pts = state.get("points", [])
     if not pts or pts[0] is None:
         return cavity_f, origin
-        
-    p0 = np.array(pts[0])
-    
-    # We follow the SR channel orientation logic:
-    # Anchor at p0, extend toward holster entrance (+X).
-    # Rotation around world Z axis.
-    theta = np.radians(rz_deg)
-    ct, st = np.cos(theta), np.sin(theta)
-    
-    # Centers of the 3 circles in world space
-    centers_local = [np.array([i * spacing, 0.0, 0.0]) for i in range(3)]
-    # Rotate local offsets by rz_deg (around Z)
-    centers_world = []
-    for cl in centers_local:
-        # standard 2D rotation for XY plane
-        rx = cl[0] * ct - cl[1] * st
-        ry = cl[0] * st + cl[1] * ct
-        centers_world.append(p0 + np.array([rx, ry, 0.0]))
+
+    flf = flf_from_points(pts)
+    if flf is None:
+        return cavity_f, origin
+    p0 = flf.origin
+
+    R_total = flf.R @ rot_z(np.radians(rz_deg))
+    centers_world = [p0 + R_total @ np.array([i * spacing, 0.0, 0.0]) for i in range(3)]
 
     # 3. Determine Side
     # We use a global grid center for the "interior" reference to ensure we fill outward.
@@ -67,18 +58,18 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     x_min, x_max = min(all_x) - outer_rad, max(all_x) + outer_rad
     y_min, y_max = min(all_y) - outer_rad, max(all_y) + outer_rad
     
-    i_min = int(round((insertion_vox - 1) - (x_max - origin[0]) / pitch))
-    i_max = int(round((insertion_vox - 1) - (x_min - origin[0]) / pitch))
+    i_min = int(round((x_min - origin[0]) / pitch))
+    i_max = int(round((x_max - origin[0]) / pitch))
     j0 = int(round((y_min - origin[1]) / pitch))
     j1 = int(round((y_max - origin[1]) / pitch))
-    
+
     i0, i1 = max(0, i_min - 2), min(nx - 1, i_max + 2)
     j0, j1 = max(0, j0 - 2), min(ny - 1, j1 + 2)
 
     count_added = 0
 
     for i in range(i0, i1 + 1):
-        gx = origin[0] + (insertion_vox - 1 - i) * pitch
+        gx = origin[0] + i * pitch
         for j in range(j0, j1 + 1):
             gy = origin[1] + j * pitch
             

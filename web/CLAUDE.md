@@ -1,12 +1,12 @@
 # LLOD Holster Workshop Rules
 
 ## Coordinate Systems & Synchronization (CRITICAL)
-- **Viewer Space (Frontend):** Muzzle is +X, Grip is -X.
-- **Voxel Space (Backend):** Index 0 is always the ENTRANCE (Grip).
-- **Coordinate Sync:** The carver logic must account for the fact that grid index `i` increases as world X decreases.
-- **Conversion Math:** 
-    - `index_i = (insertion_vox - 1) - (world_x - min_x) / pitch`
-    - `world_x = min_x + (insertion_vox - 1 - index_i) * pitch`
+- **HAS (Holster-Aligned System):** Muzzle is +X, Grip/Entrance is -X. Top of slide is +Y. Gun center is at origin.
+- **Voxel Space (Backend):** Index 0 is the ENTRANCE (-X end). Index `nx-1` is the muzzle (+X end). Indices increase monotonically with world X.
+- **Conversion Math (linear, forward):**
+    - `world_x = origin[0] + i * pitch`
+    - `i = (world_x - origin[0]) / pitch`
+- **Feature-Local Frame (FLF):** Shared by overlays and carvers. Default (single-point) is HAS_DEFAULT_R = rotY(180°): local +X → world -X (entrance direction), local +Y → world +Y, local +Z → world -Z.
 
 ## Planar Override Principle (For Additive Features)
 - **Problem:** Growing geometry relative to the gun surface inherits the scan's noise/texture.

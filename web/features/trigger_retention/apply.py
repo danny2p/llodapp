@@ -1,24 +1,19 @@
 """Trigger-retention carver.
 
-Carves a triangular indent into the cavity, anchored at the tagged trigger-
-guard point. See overlay.tsx for the matching preview geometry — they share
-the Feature-Local Frame convention (origin = tagged point, +X = entrance,
-+Y = up, +Z = gun's left).
+Carves a triangular indent into the cavity at the tagged trigger-guard point.
+Mirrors overlay.tsx via the shared Feature-Local Frame: origin = tagged point,
+local +X = toward entrance (world -X in HAS), local +Y = up.
 """
 
 from __future__ import annotations
 
 import numpy as np
 
+from features_frame import flf_from_points, rot_z
+
 
 def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
-    """Inject the triangular retention wedge into `cavity_bin`.
-
-    state   = {"enabled": bool, "points": [[x,y,z], ...], "values": {...}}
-    context = {"tg": dict | None}  (auto-detected trigger guard, unused here)
-    """
     v = state["values"]
-    coords = state["points"][0]
     front_offset_mm = float(v.get("frontOffset", 4.0))
     length_mm = float(v.get("length", 16.0))
     width_y_mm = float(v.get("widthY", 14.0))
@@ -34,31 +29,38 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     if length_mm <= 0 or half_w <= 0 or depth_z_mm <= 0:
         return cavity_f, origin
 
-    tg_front_x = float(coords[0])
-    anchor_x = tg_front_x + front_offset_mm
-    anchor_y = float(coords[1]) + y_offset_mm
-    theta = np.radians(rotate_deg)
-    ct, st = np.cos(theta), np.sin(theta)
+    flf = flf_from_points(state.get("points", []))
+    if flf is None:
+        return cavity_f, origin
+
+    # Combined rotation: world <- FLF <- Rz(rotateZ)
+    R_total = flf.R @ rot_z(np.radians(rotate_deg))
+    R_inv = R_total.T
+
+    # Anchor of the wedge's base edge in world coords (local frame offset of
+    # (frontOffset, yOffset, 0) from FLF origin).
+    anchor_world = flf.origin + R_total @ np.array([front_offset_mm, y_offset_mm, 0.0])
 
     r = min(corner_radius, half_w * 0.9, length_mm * 0.5)
     hyp = np.sqrt(half_w ** 2 + length_mm ** 2)
     n_top = np.array([half_w, length_mm]) / hyp
     n_bot = np.array([half_w, -length_mm]) / hyp
 
+    # Triangle corners in local (u, v) space — u is along local +X.
     corners_uv = [(0.0, -half_w), (0.0, half_w), (length_mm, 0.0)]
-    corner_gx = [anchor_x + u * ct - v * st for (u, v) in corners_uv]
-    corner_gy = [anchor_y + u * st + v * ct for (u, v) in corners_uv]
-    ci_vals = [insertion_vox - 1 - (g - origin[0]) / pitch for g in corner_gx]
-    j_vals = [(g - origin[1]) / pitch for g in corner_gy]
+    corner_world = [anchor_world + R_total @ np.array([u, vv, 0.0]) for (u, vv) in corners_uv]
+    ci_vals = [(cw[0] - origin[0]) / pitch for cw in corner_world]
+    j_vals = [(cw[1] - origin[1]) / pitch for cw in corner_world]
     i_lo, i_hi = max(0, int(np.floor(min(ci_vals))) - 2), min(nx - 1, int(np.ceil(max(ci_vals))) + 2)
     j_lo, j_hi = max(0, int(np.floor(min(j_vals))) - 2), min(ny - 1, int(np.ceil(max(j_vals))) + 2)
 
     for i in range(i_lo, i_hi + 1):
-        gx = origin[0] + (insertion_vox - 1 - i) * pitch
+        gx = origin[0] + i * pitch
         for j in range(j_lo, j_hi + 1):
             gy = origin[1] + (j + 0.5) * pitch
-            du, dv = gx - anchor_x, gy - anchor_y
-            u, vv = du * ct + dv * st, -du * st + dv * ct
+            dw = np.array([gx - anchor_world[0], gy - anchor_world[1], 0.0])
+            local = R_inv @ dw
+            u, vv = float(local[0]), float(local[1])
 
             sd1 = -u + r
             sd2 = (u * n_top[0] + (vv - half_w) * n_top[1]) + r
@@ -68,16 +70,13 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
             if r <= 0:
                 dist = d_shrunken
             else:
-                if d_shrunken <= 0:
-                    dist = d_shrunken - r
-                else:
-                    dist = d_shrunken - r
-                    if sd1 > 0 and sd2 > 0:
-                        dist = np.sqrt(sd1 ** 2 + sd2 ** 2) - r
-                    elif sd1 > 0 and sd3 > 0:
-                        dist = np.sqrt(sd1 ** 2 + sd3 ** 2) - r
-                    elif sd2 > 0 and sd3 > 0:
-                        dist = np.sqrt(sd2 ** 2 + sd3 ** 2) - r
+                dist = d_shrunken - r
+                if sd1 > 0 and sd2 > 0:
+                    dist = np.sqrt(sd1 ** 2 + sd2 ** 2) - r
+                elif sd1 > 0 and sd3 > 0:
+                    dist = np.sqrt(sd1 ** 2 + sd3 ** 2) - r
+                elif sd2 > 0 and sd3 > 0:
+                    dist = np.sqrt(sd2 ** 2 + sd3 ** 2) - r
 
             if dist > 0:
                 continue

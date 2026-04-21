@@ -89,12 +89,12 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     k_tip_plane = (z_tip_plane - origin[2]) / pitch
 
     # ── Bounding box ─────────────────────────────────────────────────────────
-    x_min = min(p0[0], p1[0])
-    x_max = max(p0[0], p1[0]) + width
+    x_min = min(p0[0], p1[0]) - width
+    x_max = max(p0[0], p1[0])
     y_min = min(p0[1], p1[1])
     y_max = max(p0[1], p1[1])
 
-    def world_to_i(wx): return (insertion_vox - 1) - (wx - origin[0]) / pitch
+    def world_to_i(wx): return (wx - origin[0]) / pitch
     def world_to_j(wy): return (wy - origin[1]) / pitch
 
     margin = 2
@@ -109,7 +109,7 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     count = 0
 
     for i in range(i0, i1 + 1):
-        gx = origin[0] + (insertion_vox - 1 - i) * pitch
+        gx = origin[0] + i * pitch
 
         for j in range(j0, j1 + 1):
             gy = origin[1] + j * pitch
@@ -125,9 +125,9 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
             if s < 0.0 or s > 1.0:
                 continue
 
-            # X containment
+            # X containment — band extends from the tagged edge toward -X
             x_lead = p0[0] + s * dx_edge
-            t_x = gx - x_lead
+            t_x = x_lead - gx
             if t_x < 0.0 or t_x > width:
                 continue
 
