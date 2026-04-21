@@ -53,11 +53,31 @@ def smooth_mesh(mesh: trimesh.Trimesh, iterations: int = 10) -> trimesh.Trimesh:
 
 
 def decimate(mesh: trimesh.Trimesh, target: int) -> trimesh.Trimesh:
+    # 1. Convert to Open3D
+    import open3d as o3d
     tm = o3d.geometry.TriangleMesh(
         vertices=o3d.utility.Vector3dVector(mesh.vertices),
         triangles=o3d.utility.Vector3iVector(mesh.faces),
     )
-    tm = tm.simplify_quadric_decimation(target_number_of_triangles=target)
+    
+    current_faces = len(mesh.faces)
+    
+    # 2. Fast intermediate decimation if mesh is massive (> 1M faces)
+    # Quadric decimation is O(N log N) or worse; clustering is O(N).
+    if current_faces > 1_000_000:
+        # Use clustering to get down to ~500k-800k faces quickly.
+        # voxel_size calculation: we want roughly 200-300 divisions along the longest axis.
+        span = np.max(mesh.bounds[1] - mesh.bounds[0])
+        cluster_voxel = span / 300.0
+        tm = tm.simplify_vertex_clustering(
+            voxel_size=cluster_voxel,
+            contraction=o3d.geometry.SimplificationContraction.Average
+        )
+    
+    # 3. High-quality quadric decimation for the final target
+    if len(tm.triangles) > target:
+        tm = tm.simplify_quadric_decimation(target_number_of_triangles=target)
+        
     out = trimesh.Trimesh(
         vertices=np.asarray(tm.vertices),
         faces=np.asarray(tm.triangles),
@@ -285,14 +305,18 @@ def sweep_cavity_sdf(gun_sdf: np.ndarray, insertion_depth_vox: int) -> np.ndarra
 
 
 def cavity_to_mesh(cavity_sdf: np.ndarray, origin: np.ndarray, pitch: float,
-                   smooth_sigma: float = 0.0) -> trimesh.Trimesh:
+                   smooth_sigma: float = 0.0, step_size: int = 1) -> trimesh.Trimesh:
     from skimage import measure
     pad_val = float(np.abs(cavity_sdf).max())
     padded = np.pad(cavity_sdf, 1, mode="constant", constant_values=pad_val).astype(np.float32)
     if smooth_sigma > 0:
         from scipy.ndimage import gaussian_filter
         padded = gaussian_filter(padded, sigma=smooth_sigma)
-    verts, faces, _, _ = measure.marching_cubes(padded, level=0.0)
+    
+    # step_size > 1 drastically reduces face count and runtime
+    verts, faces, _, _ = measure.marching_cubes(padded, level=0.0, step_size=step_size)
+    
+    # Verts are in padded voxel indices. Scale to world units.
     verts = (verts - 1.0) * pitch + origin
     m = trimesh.Trimesh(vertices=verts, faces=faces, process=True)
     m.merge_vertices()
@@ -597,7 +621,7 @@ def main() -> None:
             console.print(f"features touched {int(touched.sum()):,} voxels")
 
     emit_progress(0.85, "extracting high-res mesh via marching cubes")
-    mesh = cavity_to_mesh(cavity_sdf_final, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma)
+    mesh = cavity_to_mesh(cavity_sdf_final, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma, step_size=2)
     if args.smooth_iter > 0:
         console.rule(f"Taubin Smoothing ({args.smooth_iter} iterations)")
         mesh = smooth_mesh(mesh, iterations=args.smooth_iter)

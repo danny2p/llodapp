@@ -24,19 +24,20 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     height_vox = height_y / pitch
     half_w_vox = (width_z / 2.0) / pitch
 
-    # Auto-anchor to SLIDE top (not bbox top). The bbox top captures iron
-    # sight tips; we want the broad flat slide plateau. For each (i, k)
-    # column, find the highest occupied j, then take the highest j-value
-    # shared by at least 1% of occupied columns — this excludes the narrow
-    # sight columns while keeping the wide slide top.
-    col_has_any = cavity_bin.any(axis=1)                              # (nx, nz)
-    top_j_per_col = (ny - 1) - np.argmax(cavity_bin[:, ::-1, :], axis=1)
+    # Auto-anchor to the SLIDE plateau. For every occupied (i, k) column,
+    # take the highest j that is actually filled. The slide forms one huge
+    # cluster in that histogram; iron sights form tiny clusters above it.
+    # We pick the mode (modal j) and then walk upward as long as neighboring
+    # j-bins still hold a meaningful share of the modal count, which keeps
+    # slight crowns in the slide top while rejecting sight tips.
+    occupied_vox = cavity_bin > 0.5
+    col_has_any = occupied_vox.any(axis=1)                            # (nx, nz)
+    top_j_per_col = (ny - 1) - np.argmax(occupied_vox[:, ::-1, :], axis=1)
     top_js = top_j_per_col[col_has_any]
     if top_js.size > 0:
         unique, counts = np.unique(top_js, return_counts=True)
-        threshold = max(1, int(top_js.size * 0.01))
-        keep = counts >= threshold
-        gun_top_j = float(unique[keep].max()) if keep.any() else float(top_js.max())
+        mode_idx = int(np.argmax(counts))
+        gun_top_j = float(unique[mode_idx])
     else:
         gun_top_j = float(ny - 1)
 
@@ -82,8 +83,11 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
                     count += 1
 
     if console is not None:
+        gun_top_world_y = origin[1] + gun_top_j * pitch
         console.print(
-            f"  [blue]sight_channel[/blue]: auto-added {count:,} voxels (centered ridge)"
+            f"  [blue]sight_channel[/blue]: slide_top_j={gun_top_j:.1f} "
+            f"(worldY={gun_top_world_y:+.2f}mm) "
+            f"added {count:,} voxels"
         )
 
     return cavity_f, origin
