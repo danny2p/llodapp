@@ -10,7 +10,7 @@ import {
   Html,
 } from "@react-three/drei";
 import { useDrag } from "@use-gesture/react";
-import { Suspense, useMemo, useRef, useEffect, useState } from "react";
+import { Suspense, useMemo, useRef, useEffect, useState, useCallback } from "react";
 import * as THREE from "three";
 import { STLLoader } from "three-stdlib";
 import {
@@ -71,9 +71,11 @@ type SceneProps = {
 function FeatureOverlays({
   featureStates,
   globalParams,
+  muzzleX = 0,
 }: {
   featureStates: FeatureStates;
   globalParams: GlobalParams;
+  muzzleX?: number;
 }) {
   return (
     <group>
@@ -82,12 +84,12 @@ function FeatureOverlays({
         const state = featureStates[def.id];
         if (!state?.enabled) return null;
 
-        // For automatic features (0 points), use identity frame at world origin.
+        // For automatic features (0 points), anchor at the provided muzzle position.
         // For tagged features, derive frame from points.
         let flf = flfFromPoints(state.points);
         if (!flf && def.points.length === 0) {
           flf = {
-            origin: [0, 0, 0],
+            origin: [muzzleX, 0, 0],
             R: [
               [1, 0, 0],
               [0, 1, 0],
@@ -130,24 +132,35 @@ function PickingGun({
   onTagPoint,
   gunColor,
   meshRef,
+  onLoad,
 }: {
   url: string;
   activeTag: ActiveTag;
   onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
   gunColor: string;
   meshRef: React.RefObject<THREE.Mesh | null>;
+  onLoad?: (size: THREE.Vector3, center: THREE.Vector3) => void;
 }) {
   const geometry = useLoader(STLLoader, url);
-  const mesh = useMemo(() => {
+  const meshData = useMemo(() => {
     const g = geometry.clone();
     g.computeVertexNormals();
-    return g;
+    g.computeBoundingBox();
+    const size = new THREE.Vector3();
+    const center = new THREE.Vector3();
+    g.boundingBox!.getSize(size);
+    g.boundingBox!.getCenter(center);
+    return { geometry: g, size, center };
   }, [geometry]);
+
+  useEffect(() => {
+    if (onLoad) onLoad(meshData.size, meshData.center);
+  }, [meshData, onLoad]);
 
   return (
     <mesh
       ref={meshRef}
-      geometry={mesh}
+      geometry={meshData.geometry}
       onPointerDown={(e) => {
         if (activeTag) {
           e.stopPropagation();
@@ -846,6 +859,14 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
   } = props;
 
   const gunMeshRef = useRef<THREE.Mesh>(null);
+  const [gunBounds, setGunBounds] = useState<{ size: THREE.Vector3, center: THREE.Vector3 } | null>(null);
+
+  const handleGunLoad = useCallback((size: THREE.Vector3, center: THREE.Vector3) => {
+    setGunBounds((prev) => {
+      if (prev && prev.size.equals(size) && prev.center.equals(center)) return prev;
+      return { size, center };
+    });
+  }, []);
 
   const markers = useMemo(() => {
     const out: Array<{
@@ -876,6 +897,14 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
     return out;
   }, [featureStates, activeTag]);
 
+  const gunMuzzleX = useMemo(() => {
+    if (gunBounds) {
+      // Muzzle is at -X in the unrotated tagging mesh
+      return gunBounds.center.x - gunBounds.size.x / 2;
+    }
+    return -80; 
+  }, [gunBounds]);
+
   return (
     <>
       {step === 1.5 && alignedGunUrl && (
@@ -886,11 +915,22 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
             onTagPoint={onTagPoint}
             gunColor={globalParams.gunColor}
             meshRef={gunMeshRef}
+            onLoad={handleGunLoad}
           />
           <FeatureOverlays
             featureStates={featureStates}
             globalParams={globalParams}
+            muzzleX={gunMuzzleX}
           />
+          
+          {/* Visual indicator for Total Length (Insertion Depth) */}
+          <mesh 
+            position={[gunMuzzleX + globalParams.totalLength, gunBounds?.center.y ?? 0, 0]} 
+            rotation={[0, Math.PI / 2, 0]}
+          >
+            <planeGeometry args={[100, 100]} />
+            <meshBasicMaterial color="#ef4444" transparent opacity={0.2} side={THREE.DoubleSide} />
+          </mesh>
         </>
       )}
 
