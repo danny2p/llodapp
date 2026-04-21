@@ -13,13 +13,14 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
 
     # 1. Get Params
     v = state.get("values", {})
+    length_mm = float(v.get("length", 160.0))
     height_y = float(v.get("height", 10.0))
     width_z = float(v.get("width", 4.0))
     ox = float(v.get("offsetX", -19.0))
     oy = float(v.get("offsetY", 50.0))
     rz_deg = float(v.get("rotateZ", 0.0))
     
-    # 2. Geometric Anchors (Backend Space: Muzzle is MIN X, Grip is MAX X)
+    # 2. Geometric Anchors (Backend Space: Entrance is MIN X, Muzzle is MAX X)
     # Grid is centered at y=0, z=0 in world space (roughly).
     # We use manual offsets directly to match the 3D viewer.
     
@@ -27,7 +28,6 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     half_w_vox = (width_z / 2.0) / pitch
     
     # Vertical target (match THREE.Vector3(ox, oy, 0))
-    # world_y = origin[1] + j * pitch  => j = (world_y - origin[1]) / pitch
     target_j = (oy / pitch) + (half_h_vox) - (origin[1] / pitch)
     j_start = (oy / pitch) - (half_h_vox) - (origin[1] / pitch)
     
@@ -49,7 +49,11 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     safety_vox = int(np.ceil(2.0 / pitch))
     end_i = max(0, muzzle_i - safety_vox)
 
-    for i in range(end_i + 1):
+    # Start carving from (end_i - length)
+    length_vox = int(np.ceil(length_mm / pitch))
+    start_i = max(0, end_i - length_vox)
+
+    for i in range(start_i, end_i + 1):
         # Local X with offset
         # world_x = origin[0] + (insertion_vox - 1 - i) * pitch
         # world_x_shifted = world_x - ox
