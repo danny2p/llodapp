@@ -1,0 +1,129 @@
+{
+  "filename": "sig_p320-MOS-migration.json",
+  "stlStem": "sig_p320",
+  "savedAt": "2026-04-20T23:55:00.000Z",
+  "globalParams": {
+    "voxelPitch": 0.25,
+    "smoothSigma": 0.8,
+    "smoothIter": 10,
+    "plugDecimTarget": 60000,
+    "gunDecimTarget": 60000,
+    "mirror": false,
+    "rotateZDeg": 0,
+    "gunColor": "#6e7480",
+    "moldColor": "#00e6d6",
+    "totalLength": 160
+  },
+  "featureStates": {
+    "trigger_retention": {
+      "enabled": true,
+      "points": [
+        [
+          45.68730321394955,
+          -1.3420625945359361,
+          -6.754962454059694
+        ]
+      ],
+      "values": {
+        "frontOffset": 4,
+        "length": 20,
+        "widthY": 18,
+        "depthZ": 3.3,
+        "yOffset": 0,
+        "rotateZDeg": 17,
+        "cornerRadius": 5,
+        "oneSide": false
+      }
+    },
+    "slide_release": {
+      "enabled": true,
+      "points": [
+        [
+          28.997598326611403,
+          23.712746995551683,
+          -11.553055511635478
+        ]
+      ],
+      "values": {
+        "widthY": 14,
+        "depthZ": 6,
+        "yOffset": 0,
+        "chamfer": 2
+      }
+    },
+    "ejection_port": {
+      "enabled": false,
+      "points": [
+        null
+      ],
+      "values": {}
+    },
+    "generic_cut": {
+      "enabled": false,
+      "points": [
+        null
+      ],
+      "values": {
+        "width": 100,
+        "height": 100,
+        "depth": 50,
+        "rotateZ": 0,
+        "offsetX": 0,
+        "offsetY": 0
+      }
+    },
+    "slide_circles": {
+      "enabled": true,
+      "points": [
+        [
+          83.87583906662306,
+          34.20919980338473,
+          11.307455483357103
+        ]
+      ],
+      "values": {
+        "outerDia": 10,
+        "innerDia": 2,
+        "spacing": 15,
+        "height": 6,
+        "rotateZ": 0
+      }
+    },
+    "sight_channel": {
+      "enabled": true,
+      "points": [],
+      "values": {
+        "height": 10,
+        "width": 6,
+        "offsetX": 0,
+        "offsetY": 50,
+        "rotateZ": 0
+      }
+    },
+    "gun_band": {
+      "enabled": true,
+      "points": [
+        [
+          0.15839650002247652,
+          40.06152785535749,
+          -11.318506293933297
+        ],
+        [
+          -32.61074295109938,
+          -69.99412768260976,
+          -13.721458709810975
+        ]
+      ],
+      "values": {
+        "width": 20,
+        "depthZ": 5.5,
+        "extendTop": 15.5,
+        "extendBottom": 0,
+        "offsetX": 0,
+        "offsetY": 0,
+        "chamfer": 14.5,
+        "chamferDepth": 21
+      }
+    }
+  }
+}

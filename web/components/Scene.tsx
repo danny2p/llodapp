@@ -237,7 +237,8 @@ function MoldAssets({
       <ClayBlock
         visible={step === 2}
         sizeHint={plug.size}
-        totalLength={globalParams.totalLength}
+        totalLength={plug.size.x}
+        centerX={plug.center.x}
       />
       {step >= 2 && (
         <Plug
@@ -404,7 +405,7 @@ function Plug({
     if (rightGroupRef.current) rightGroupRef.current.visible = showRight;
 
     if (step === 2) {
-      const moldFrontX = plug.size.x / 2 + 0.5;
+      const moldFrontX = plug.center.x + plug.size.x / 2 + 0.5;
       const startX = -globalParams.totalLength * 1.1;
       const endX = moldFrontX - plug.gunLeadingX;
       const gunX = THREE.MathUtils.lerp(startX, endX, t);
@@ -514,10 +515,12 @@ function ClayBlock({
   visible,
   sizeHint,
   totalLength,
+  centerX = 0,
 }: {
   visible: boolean;
   sizeHint: THREE.Vector3;
   totalLength: number;
+  centerX?: number;
 }) {
   const ref = useRef<THREE.Mesh>(null);
   const lightRef = useRef<THREE.PointLight>(null);
@@ -545,7 +548,7 @@ function ClayBlock({
   const d = sizeHint.z * 2.2;
 
   return (
-    <group position={[0, 0, 0]}>
+    <group position={[centerX, 0, 0]}>
       <mesh ref={ref}>
         <boxGeometry args={[w, h, d]} />
         <meshStandardMaterial

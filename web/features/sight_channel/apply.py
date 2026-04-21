@@ -37,8 +37,19 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     
     # 3. Carving Loop
     count = 0
-    # Spans the entire length of the swept grid
-    for i in range(nx):
+    
+    # Find the actual physical muzzle floor in the grid
+    occupied_i = np.where(cavity_bin.any(axis=(1, 2)))[0]
+    if len(occupied_i) > 0:
+        muzzle_i = int(occupied_i.max())
+    else:
+        muzzle_i = nx - 1
+        
+    # Stop 2mm before the floor to prevent protrusion past the muzzle
+    safety_vox = int(np.ceil(2.0 / pitch))
+    end_i = max(0, muzzle_i - safety_vox)
+
+    for i in range(end_i + 1):
         # Local X with offset
         # world_x = origin[0] + (insertion_vox - 1 - i) * pitch
         # world_x_shifted = world_x - ox
