@@ -82,6 +82,7 @@ type ProcessResponse = SceneAssets & {
 
 const DEFAULT_GLOBAL_PARAMS: GlobalParams = {
   voxelPitch: 0.25,
+  mcStepSize: 2,
   smoothSigma: 0.8,
   smoothIter: 10,
   plugDecimTarget: 60000,
@@ -1982,6 +1983,18 @@ function GlobalParamPanel({
           step={0.05}
           hint="Lower = more surface detail, more compute."
           onChange={(v) => updateGlobalParam("voxelPitch", v)}
+          disabled={disabled}
+        />
+        <Slider
+          label="MC STEP SIZE"
+          code="s"
+          unit="vox"
+          value={globalParams.mcStepSize ?? 2}
+          min={1}
+          max={3}
+          step={1}
+          hint="Marching cubes skip. 1=HQ, 2=Fast, 3=Extreme."
+          onChange={(v) => updateGlobalParam("mcStepSize", v)}
           disabled={disabled}
         />
         <Slider

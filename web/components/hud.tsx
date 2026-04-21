@@ -179,9 +179,10 @@ export function Slider({
   onChange: (v: number) => void;
   disabled?: boolean;
 }) {
-  const pct = Math.max(0, Math.min(100, ((value - min) / (max - min)) * 100));
+  const safeValue = value ?? min;
+  const pct = Math.max(0, Math.min(100, ((safeValue - min) / (max - min)) * 100));
   const valueText =
-    Number.isInteger(value) ? value.toString() : value.toFixed(2);
+    Number.isInteger(safeValue) ? safeValue.toString() : safeValue.toFixed(2);
 
   return (
     <div

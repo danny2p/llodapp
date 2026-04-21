@@ -340,10 +340,10 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
-def _cache_key(input_path: Path, voxel_pitch: float, rotate_z_deg: float, mirror: bool, total_length: float) -> str:
+def _cache_key(input_path: Path, voxel_pitch: float, mc_step_size: int, rotate_z_deg: float, mirror: bool, total_length: float) -> str:
     mir = "1" if mirror else "0"
-    # has1: HAS migration — cavity origin/sweep convention now muzzle=+X, entrance=index 0.
-    return f"{_hash_file(input_path)}_p{voxel_pitch}_rz{rotate_z_deg}_m{mir}_l{total_length}_has1"
+    # has2: HAS migration — cavity origin/sweep convention now muzzle=+X, entrance=index 0. Added mc_step_size.
+    return f"{_hash_file(input_path)}_p{voxel_pitch}_s{mc_step_size}_rz{rotate_z_deg}_m{mir}_l{total_length}_has2"
 
 
 def _load_prep_cache(cache_base: Path, key: str):
@@ -398,6 +398,8 @@ def main() -> None:
     parser.add_argument("--voxel-pitch", type=float, default=VOXEL_PITCH_MM,
                         help=f"Voxel grid pitch in mm (default {VOXEL_PITCH_MM}). "
                              "Lower = more detail, quadratically more compute/memory.")
+    parser.add_argument("--mc-step-size", type=int, default=1,
+                        help="Marching cubes step size. 1=HQ, 2=Faster, 3=Extreme speed.")
     parser.add_argument("--out-dir", type=str, default=None,
                         help="Directory for output STLs (default: python-proto/out).")
     parser.add_argument("--decim-target", type=int, default=None,
@@ -440,7 +442,7 @@ def main() -> None:
         suffix += "_mir"
 
     cache_base = Path(args.cache_dir).resolve() if args.cache_dir else CACHE_DIR
-    cache_key = _cache_key(input_path, args.voxel_pitch, args.rotate_z_deg, args.mirror, args.total_length)
+    cache_key = _cache_key(input_path, args.voxel_pitch, args.mc_step_size, args.rotate_z_deg, args.mirror, args.total_length)
     cached = None if args.no_cache else _load_prep_cache(cache_base, cache_key)
 
     if cached is not None:
@@ -621,7 +623,7 @@ def main() -> None:
             console.print(f"features touched {int(touched.sum()):,} voxels")
 
     emit_progress(0.85, "extracting high-res mesh via marching cubes")
-    mesh = cavity_to_mesh(cavity_sdf_final, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma, step_size=2)
+    mesh = cavity_to_mesh(cavity_sdf_final, cavity_origin, args.voxel_pitch, smooth_sigma=args.smooth_sigma, step_size=args.mc_step_size)
     if args.smooth_iter > 0:
         console.rule(f"Taubin Smoothing ({args.smooth_iter} iterations)")
         mesh = smooth_mesh(mesh, iterations=args.smooth_iter)

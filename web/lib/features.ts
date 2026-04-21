@@ -63,6 +63,7 @@ export type FeatureStates = Record<string, FeatureState>;
 // Global pipeline parameters — not tied to any one feature.
 export type GlobalParams = {
   voxelPitch: number;
+  mcStepSize: number;
   smoothSigma: number;
   smoothIter: number;
   plugDecimTarget: number;
