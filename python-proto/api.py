@@ -487,6 +487,61 @@ def delete_config(filename: str) -> dict:
     return {"deleted": safe_name}
 
 
+@app.get("/api/download-cad/{job_id}")
+async def download_cad(job_id: str) -> FileResponse:
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    print(f"Exporting CAD for job {job_id}...", flush=True)
+
+    # 1. Find the aligned gun STL to pass it to the script
+    try:
+        gun_path = _one(job_dir, "*_mabr_aligned_decim*.stl")
+    except HTTPException:
+        try:
+            gun_path = _one(job_dir, "*_mabr_aligned.stl")
+        except HTTPException:
+            raise HTTPException(status_code=500, detail="Aligned gun STL not found")
+
+    # 2. Run the CAD export script
+    cmd: list[str] = [
+        sys.executable,
+        str(HERE / "export_cad.py"),
+        "--job-dir", str(job_dir),
+        "--stl-path", str(gun_path),
+    ]
+    
+    try:
+        _run(cmd)
+    except HTTPException as e:
+        print(f"CAD Export failed: {e.detail}", flush=True)
+        raise e
+    except Exception as e:
+        print(f"Unexpected CAD Export error: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+    step_path = job_dir / "features.step"
+    if not step_path.exists():
+        print(f"Error: {step_path} missing after export script finished", flush=True)
+        raise HTTPException(status_code=500, detail="CAD export failed to produce features.step")
+
+    # 3. Create a ZIP file
+    zip_name = f"llod_export_{job_id}.zip"
+    zip_path = job_dir / zip_name
+    
+    import zipfile
+    with zipfile.ZipFile(zip_path, 'w') as zipf:
+        zipf.write(step_path, "llod_assembly.step")
+        zipf.write(gun_path, "gun_scan_reference.stl")
+
+    return FileResponse(
+        path=zip_path,
+        filename=zip_name,
+        media_type="application/zip",
+    )
+
+
 app.mount("/jobs", StaticFiles(directory=JOBS_DIR), name="jobs")
 if ACCESSORIES_DIR.exists():
     app.mount("/accessories", StaticFiles(directory=ACCESSORIES_DIR), name="accessories")

@@ -357,13 +357,16 @@ def _load_prep_cache(cache_base: Path, key: str):
     insertion_vox = int(meta["insertion_vox"])
     physical_muzzle_i = int(meta.get("physical_muzzle_i", 0))
     tg = meta.get("tg")
+    y_min = float(meta.get("y_min", 0.0))
+    y_max = float(meta.get("y_max", 0.0))
+    slide_top_y = float(meta.get("slide_top_y", y_max))
     if tg is not None:
         tg = {k: (np.asarray(v) if isinstance(v, list) else v) for k, v in tg.items()}
     aligned = trimesh.load_mesh(entry / "aligned.stl", process=True)
-    return aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i
+    return aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i, y_min, y_max, slide_top_y
 
 
-def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i: int) -> None:
+def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i: int, y_min: float, y_max: float, slide_top_y: float) -> None:
     entry = cache_base / key
     entry.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(entry / "grids.npz", cavity_sdf=cavity_sdf, origin=origin)
@@ -374,6 +377,9 @@ def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, in
         "insertion_vox": insertion_vox,
         "physical_muzzle_i": physical_muzzle_i,
         "tg": tg_json,
+        "y_min": y_min,
+        "y_max": y_max,
+        "slide_top_y": slide_top_y,
     }))
     aligned.export(entry / "aligned.stl")
     (entry / "ok").write_text("ok")  # marker; half-written entries have no "ok"
@@ -448,9 +454,12 @@ def main() -> None:
     if cached is not None:
         emit_progress(0.60, "prep cache hit :: loading grids")
         console.rule("Prep cache hit")
-        aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i = cached
+        aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i, y_min_world, y_max_world, slide_top_y = cached
         console.print(f"key: {cache_key}  ({cache_base})")
         console.print(f"aligned: {len(aligned.faces):,} faces; cavity_sdf: {cavity_sdf.shape}; tg: {'yes' if tg else 'no'}")
+        
+        # Calculate muzzle_x from cached physical_muzzle_i
+        muzzle_x = cavity_origin[0] + physical_muzzle_i * args.voxel_pitch
     else:
         raw: trimesh.Trimesh = trimesh.load_mesh(input_path, process=True)
         raw.merge_vertices()
@@ -537,13 +546,45 @@ def main() -> None:
         occupancy = cavity_sdf < 0
         tg = detect_trigger_guard(occupancy, cavity_origin, args.voxel_pitch, console)
         
-        # In this slice, the physical muzzle is exactly at (muzzle_vox - slice_start + pad_entrance)
+        # physical_muzzle_i is the World +X limit
         physical_muzzle_i = muzzle_vox - slice_start + pad_entrance
+        muzzle_x = cavity_origin[0] + physical_muzzle_i * args.voxel_pitch
+        
+        # Calculate Y bounds for automatic features like trigger_platen
+        occupancy = cavity_sdf < 0
+        occupied_indices_y = np.where(occupancy.any(axis=(0, 2)))[0]
+        y_min_vox = int(occupied_indices_y.min()) if len(occupied_indices_y) > 0 else 0
+        y_max_vox = int(occupied_indices_y.max()) if len(occupied_indices_y) > 0 else 0
+        y_min_world = cavity_origin[1] + y_min_vox * args.voxel_pitch
+        y_max_world = cavity_origin[1] + y_max_vox * args.voxel_pitch
+        
+        # Robust slide top detection (consistent with detect_features.py/Scene.tsx)
+        slide_top_y = y_max_world # Fallback
+        y_idx = np.where(occupancy, np.arange(gun_sdf.shape[1])[None, :, None], -1)
+        top_y_grid = y_idx.max(axis=1)
+        material_mask = top_y_grid >= 0
+        if material_mask.any():
+            plateau_ref = float(np.percentile(top_y_grid[material_mask], 75))
+            slide_top_y = cavity_origin[1] + plateau_ref * args.voxel_pitch
+
         context = {"tg": tg, "physical_muzzle_i": physical_muzzle_i}
 
         if not args.no_cache:
-            _save_prep_cache(cache_base, cache_key, aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i)
+            _save_prep_cache(cache_base, cache_key, aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i, y_min_world, y_max_world, slide_top_y)
             console.print(f"cached prep under {cache_key}")
+
+    # ALWAYS write meta.json to the job directory for downstream tasks (like CAD export)
+    meta_path = out_dir / "meta.json"
+    meta_path.write_text(json.dumps({
+        "total_length": args.total_length,
+        "muzzle_x": muzzle_x,
+        "pitch": args.voxel_pitch,
+        "physical_muzzle_i": physical_muzzle_i,
+        "y_min": y_min_world,
+        "y_max": y_max_world,
+        "slide_top_y": float(slide_top_y),
+        "origin": cavity_origin.tolist()
+    }))
 
     aligned_out = out_dir / f"{stem}_mabr_aligned{suffix}.stl"
     aligned.export(aligned_out)

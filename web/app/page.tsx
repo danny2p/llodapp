@@ -718,6 +718,29 @@ export default function Page() {
     }
   };
 
+  const downloadCAD = async () => {
+    if (!jobId) return;
+    setIsProcessing(true);
+    setProcessingLogs(["Exporting CAD assembly (STEP)...", "This may take a few moments..."]);
+    try {
+      const res = await fetch(`${API_BASE}/api/download-cad/${jobId}`);
+      if (!res.ok) {
+        throw new Error(await readErr(res));
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `llod-export-${stem}.zip`;
+      a.click();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const f = e.target.files?.[0];
@@ -851,6 +874,7 @@ export default function Page() {
               updateAccessory={updateAccessory}
               removeAccessory={removeAccessory}
               downloadHalf={downloadHalf}
+              downloadCAD={downloadCAD}
               stem={stem}
               reset={reset}
               processingLogs={processingLogs}
@@ -1174,6 +1198,7 @@ function StepContext(props: {
   updateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   removeAccessory: (id: string) => void;
   downloadHalf: (side: "left" | "right") => void;
+  downloadCAD: () => void;
   stem: string;
   reset: () => void;
   processingLogs: string[];
@@ -1212,6 +1237,7 @@ function StepContext(props: {
     updateAccessory,
     removeAccessory,
     downloadHalf,
+    downloadCAD,
     stem,
     reset,
     processingLogs,
@@ -1303,6 +1329,7 @@ function StepContext(props: {
             updateAccessory={updateAccessory}
             removeAccessory={removeAccessory}
             downloadHalf={downloadHalf}
+            downloadCAD={downloadCAD}
             stem={stem}
             reset={reset}
             onRerun={() => setStep(1.5)}
@@ -1765,6 +1792,7 @@ function ExportPanel({
   updateAccessory,
   removeAccessory,
   downloadHalf,
+  downloadCAD,
   stem,
   reset,
   onRerun,
@@ -1781,6 +1809,7 @@ function ExportPanel({
   updateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   removeAccessory: (id: string) => void;
   downloadHalf: (side: "left" | "right") => void;
+  downloadCAD: () => void;
   stem: string;
   reset: () => void;
   onRerun: () => void;
@@ -1921,6 +1950,14 @@ function ExportPanel({
           <Download size={12} />
           Unified Mold · STL
         </a>
+        <Button
+          onClick={downloadCAD}
+          icon={<Download size={12} />}
+          variant="primary"
+          className="bg-[var(--hud-teal)]/20 border-[var(--hud-teal)]/40 hover:bg-[var(--hud-teal)]/30"
+        >
+          CAD Assembly · STEP
+        </Button>
         <div className="grid grid-cols-2 gap-1.5">
           <Button
             onClick={() => downloadHalf("left")}
