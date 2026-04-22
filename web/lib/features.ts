@@ -83,6 +83,7 @@ export type FeatureOverlayProps = {
   color: string;
   flf: FLF;
   globalParams: GlobalParams;
+  muzzleX: number;
 };
 
 export type FeatureDef = {

@@ -114,6 +114,7 @@ function FeatureOverlays({
               color={color}
               flf={flf}
               globalParams={globalParams}
+              muzzleX={muzzleX}
             />
           );
         });
@@ -361,7 +362,7 @@ function Plug({
   globalParams: GlobalParams;
 }) {
   const plugMeshRef = useRef<THREE.Mesh>(null);
-  const gunRef = useRef<THREE.Mesh>(null);
+  const gunRef = useRef<THREE.Group>(null);
   const leftGroupRef = useRef<THREE.Group>(null);
   const rightGroupRef = useRef<THREE.Group>(null);
   const progressRef = useRef(0);
@@ -836,7 +837,7 @@ function ProcessingSimulation({
   const [gunSize, setGunSize] = useState<THREE.Vector3>(
     new THREE.Vector3(160, 40, 30)
   );
-  const gunRef = useRef<THREE.Mesh>(null);
+  const gunRef = useRef<THREE.Group>(null);
   const scanPlaneRef = useRef<THREE.Mesh>(null);
 
   const plugClipPlane = useMemo(
@@ -889,7 +890,8 @@ function ProcessingSimulation({
       );
     }
 
-    const mat = gunRef.current.material as THREE.MeshStandardMaterial;
+    const mesh = gunRef.current.children[0] as THREE.Mesh;
+    const mat = mesh.material as THREE.MeshStandardMaterial;
     const pulse = (Math.sin(pulsePhaseRef.current) + 1) / 2;
     mat.emissiveIntensity = 0.2 + pulse * 0.6;
   });

@@ -4,7 +4,7 @@ import React, { useMemo } from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
-export default function SlideCirclesOverlay({ def, state, color, flf }: FeatureOverlayProps) {
+export default function SlideCirclesOverlay({ def, state, color, flf, globalParams, muzzleX }: FeatureOverlayProps) {
   const outerDia = Number(state.values.outerDia ?? 10);
   const innerDia = Number(state.values.innerDia ?? 2);
   const spacing = Number(state.values.spacing ?? 15);

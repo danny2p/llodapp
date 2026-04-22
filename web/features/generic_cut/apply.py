@@ -36,10 +36,10 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     R_total = flf.R @ R_local
     
     # world center of the box
-    # Handle (0,0) is 10mm to the right of the top-right corner.
-    # Top-right corner = (-10, 0)
-    # Center = (-10 - w/2, -h/2)
-    base_x = -10.0 - w / 2.0
+    # Handle (0,0) is towards the muzzle. 
+    # Box is towards the rear (local +X).
+    # Box center is at (10 + w/2) in local space relative to handle.
+    base_x = 10.0 + w / 2.0
     base_y = -h / 2.0
     
     local_offset = np.array([base_x + ox, base_y + oy, 0.0])

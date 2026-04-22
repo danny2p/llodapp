@@ -4,7 +4,7 @@ import React, { useMemo } from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
-export default function GenericCutOverlay({ def, state, color, flf }: FeatureOverlayProps) {
+export default function GenericCutOverlay({ def, state, color, flf, globalParams, muzzleX }: FeatureOverlayProps) {
   const w = Number(state.values.width ?? 7);
   const h = Number(state.values.height ?? 7);
   const d = Number(state.values.depth ?? 5);
@@ -14,10 +14,12 @@ export default function GenericCutOverlay({ def, state, color, flf }: FeatureOve
   const oy = Number(state.values.offsetY ?? 0);
 
   // Box center calculation:
-  // Handle (0,0) is 10mm to the right of the top-right corner.
-  // Top-right corner = (-10, 0)
-  // Center = (-10 - w/2, -h/2)
-  const baseX = -10 - w / 2;
+  // Handle (0,0) is towards the muzzle. 
+  // Box is towards the rear (local +X).
+  // Handle is 10mm to the right (muzzle-ward) of the box's top-front corner.
+  // In local space, muzzle is -X. So handle is at local -X relative to the box.
+  // Or Box is at local +X relative to handle.
+  const baseX = 10 + w / 2;
   const baseY = -h / 2;
   const boxPos = new THREE.Vector3(baseX + ox, baseY + oy, 0);
   

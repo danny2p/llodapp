@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
-export default function SightChannelOverlay({ def, state, color, flf }: FeatureOverlayProps) {
+export default function SightChannelOverlay({ def, state, color, flf, globalParams, muzzleX }: FeatureOverlayProps) {
   const h = Number(state.values.height ?? 10);
   const w = Number(state.values.width ?? 4);
   const channelLength = Number(state.values.length ?? 160);

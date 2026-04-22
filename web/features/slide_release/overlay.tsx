@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import type { FeatureOverlayProps } from "@/lib/features";
 
-export default function Overlay({ def, state, color, flf }: FeatureOverlayProps) {
+export default function Overlay({ def, state, color, flf, globalParams, muzzleX }: FeatureOverlayProps) {
   const v = state.values as Record<string, number | boolean>;
   const widthY = v.widthY as number;
   const depthZ = v.depthZ as number;
@@ -14,7 +14,11 @@ export default function Overlay({ def, state, color, flf }: FeatureOverlayProps)
   const anchor = state.points[0];
   if (!anchor) return null;
 
-  const channelLength = 200;
+  // Cap channel length at the holster entrance plane.
+  // Entrance plane X = muzzleX - totalLength
+  const entranceX = muzzleX - globalParams.totalLength;
+  const channelLength = Math.max(0, anchor[0] - entranceX);
+
   const w = widthY;
   const d = depthZ;
   const c = chamfer;

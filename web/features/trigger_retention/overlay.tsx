@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import type { FeatureOverlayProps } from "@/lib/features";
 
-export default function Overlay({ def, state, color, flf }: FeatureOverlayProps) {
+export default function Overlay({ def, state, color, flf, globalParams, muzzleX }: FeatureOverlayProps) {
   const v = state.values as Record<string, number | boolean>;
   const frontOffset = v.frontOffset as number;
   const length = v.length as number;

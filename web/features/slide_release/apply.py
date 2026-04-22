@@ -23,6 +23,9 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     # Linear HAS mapping: anchor voxel X is just (anchor_x - origin_x) / pitch.
     # Channel extends from the anchor toward the entrance (i decreasing).
     i_start = int(round((sr_coords[0] - origin[0]) / pitch))
+    if i_start < 0:
+        return cavity_f, origin
+
     j_c = int(round((sr_coords[1] + y_offset_mm - origin[1]) / pitch))
     k_tag_vox = (sr_coords[2] - origin[2]) / pitch
 
