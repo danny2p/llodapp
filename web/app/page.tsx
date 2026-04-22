@@ -57,6 +57,7 @@ import {
   initialFeatureStates,
   areAllFeaturesReady,
   featureProgress,
+  getInstanceColor,
   type FeatureDef,
   type FeatureState,
   type FeatureStates,
@@ -111,7 +112,7 @@ export type PlacedAccessory = {
 export type Step = 1 | 1.5 | 2 | 3;
 
 // Which feature point is the user actively tagging?
-export type ActiveTag = { featureId: string; pointIndex: number } | null;
+export type ActiveTag = { featureId: string; instanceIndex: number; pointIndex: number } | null;
 
 const STEP_META: Record<
   number,
@@ -289,65 +290,185 @@ export default function Page() {
       const config = await res.json();
       if (config.globalParams) setGlobalParams(config.globalParams);
       if (config.featureStates) {
-        setFeatureStates((prev) => ({ ...prev, ...config.featureStates }));
+        // Migration: convert old Record<string, FeatureState> to Record<string, FeatureState[]>
+        const migrated: FeatureStates = {};
+        for (const [fid, state] of Object.entries(config.featureStates)) {
+          if (Array.isArray(state)) {
+            migrated[fid] = state;
+          } else {
+            // It's a single state object, wrap it.
+            migrated[fid] = [state as any];
+          }
+        }
+        setFeatureStates((prev) => ({ ...prev, ...migrated }));
       }
       setActiveConfigName(configFilename);
+      const loadedFeatureStates = config.featureStates || featureStates;
       setLastLoadedConfig({
         globalParams: config.globalParams || globalParams,
-        featureStates: config.featureStates || featureStates,
+        featureStates: loadedFeatureStates,
       });
     } catch (e) {
       console.error("Failed to load config", e);
     }
-  }, []);
+  }, [globalParams, featureStates]);
 
   const updateFeatureEnabled = useCallback(
-    (featureId: string, enabled: boolean) => {
-      setFeatureStates((prev) => ({
-        ...prev,
-        [featureId]: { ...prev[featureId], enabled },
-      }));
+    (featureId: string, instanceIndex: number, enabled: boolean) => {
+      setFeatureStates((prev) => {
+        const instances = [...prev[featureId]];
+        instances[instanceIndex] = { ...instances[instanceIndex], enabled };
+        return { ...prev, [featureId]: instances };
+      });
     },
     []
   );
 
   const updateFeatureValue = useCallback(
-    (featureId: string, paramId: string, value: FeatureValue) => {
-      setFeatureStates((prev) => ({
-        ...prev,
-        [featureId]: {
-          ...prev[featureId],
-          values: { ...prev[featureId].values, [paramId]: value },
-        },
-      }));
+    (featureId: string, instanceIndex: number, paramId: string, value: FeatureValue) => {
+      setFeatureStates((prev) => {
+        const instances = [...prev[featureId]];
+        const inst = { ...instances[instanceIndex] };
+        inst.values = { ...inst.values, [paramId]: value };
+
+        // Real-time update for gun_band projection
+        if (featureId === "gun_band" && paramId === "gripAngle" && inst.points[0] && inst.points[1]) {
+          const p0 = inst.points[0];
+          const p1 = inst.points[1];
+          const rad = (Number(value) * Math.PI) / 180;
+          
+          // Current distance
+          const dx = p1[0] - p0[0];
+          const dy = p1[1] - p0[1];
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          
+          // Re-project at new angle, maintaining distance
+          const newDx = -dist * Math.sin(rad);
+          const newDy = -dist * Math.cos(rad);
+          
+          const newPts = [...inst.points];
+          newPts[1] = [p0[0] + newDx, p0[1] + newDy, p1[2]];
+          inst.points = newPts;
+        }
+
+        instances[instanceIndex] = inst;
+        return { ...prev, [featureId]: instances };
+      });
     },
     []
   );
 
   const clearFeaturePoint = useCallback(
-    (featureId: string, pointIndex: number) => {
+    (featureId: string, instanceIndex: number, pointIndex: number) => {
       setFeatureStates((prev) => {
-        const s = prev[featureId];
-        const pts = [...s.points];
+        const instances = [...prev[featureId]];
+        const inst = instances[instanceIndex];
+        const pts = [...inst.points];
         pts[pointIndex] = null;
-        return { ...prev, [featureId]: { ...s, points: pts } };
+        instances[instanceIndex] = { ...inst, points: pts };
+        return { ...prev, [featureId]: instances };
       });
-      setActiveTag({ featureId, pointIndex });
+      setActiveTag({ featureId, instanceIndex, pointIndex });
     },
     []
   );
 
   const onTagPoint = useCallback(
-    (featureId: string, pointIndex: number, coords: Vec3) => {
+    (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => {
       setFeatureStates((prev) => {
-        const s = prev[featureId];
-        const pts = [...s.points];
-        pts[pointIndex] = coords;
-        return { ...prev, [featureId]: { ...s, points: pts } };
+        const instances = [...prev[featureId]];
+        const inst = { ...instances[instanceIndex] };
+        const pts = [...inst.points];
+        
+        // Custom logic for gun_band
+        if (featureId === "gun_band") {
+          const gripAngleDeg = Number(inst.values.gripAngle ?? 20);
+          const rad = (gripAngleDeg * Math.PI) / 180;
+          
+          if (pointIndex === 0) {
+            // Tagging p0 (Top): auto-project p1 (Bottom) 120mm away
+            pts[0] = coords;
+            // Project downward (negative Y) and rearward (negative X in HAS world space)
+            // Note: HAS orientation is Muzzle at +X. Grip is at -X, -Y.
+            const dx = -120 * Math.sin(rad);
+            const dy = -120 * Math.cos(rad);
+            pts[1] = [coords[0] + dx, coords[1] + dy, coords[2]];
+          } else if (pointIndex === 1 && pts[0]) {
+            // Tagging p1 (Bottom): constrain to the angle from p0
+            const p0 = pts[0];
+            const dx = coords[0] - p0[0];
+            const dy = coords[1] - p0[1];
+            
+            // Project current mouse click onto the vector defined by gripAngle
+            const angleVec = [-Math.sin(rad), -Math.cos(rad)];
+            const dot = dx * angleVec[0] + dy * angleVec[1];
+            
+            pts[1] = [
+              p0[0] + angleVec[0] * dot,
+              p0[1] + angleVec[1] * dot,
+              coords[2], // Keep the depth from the click
+            ];
+          } else {
+            pts[pointIndex] = coords;
+          }
+        } else {
+          pts[pointIndex] = coords;
+        }
+
+        instances[instanceIndex] = { ...inst, points: pts };
+        return { ...prev, [featureId]: instances };
       });
     },
     []
   );
+
+  const addFeatureInstance = useCallback((featureId: string) => {
+    const def = FEATURES_BY_ID[featureId];
+    if (!def) return;
+    
+    setFeatureStates((prev) => {
+      const instances = [...prev[featureId]];
+      const values: Record<string, FeatureValue> = {};
+      for (const p of def.params) values[p.id] = p.default;
+      
+      const newInst: FeatureState = {
+        enabled: true,
+        points: def.points.map(() => null),
+        values,
+      };
+      
+      const nextInstances = [...instances, newInst];
+      return { ...prev, [featureId]: nextInstances };
+    });
+    
+    // Auto-activate tagging for the first point of the new instance
+    setFeatureStates((prev) => {
+      setActiveTag({ 
+        featureId, 
+        instanceIndex: prev[featureId].length - 1, 
+        pointIndex: 0 
+      });
+      return prev;
+    });
+  }, []);
+
+  const removeFeatureInstance = useCallback((featureId: string, index: number) => {
+    setFeatureStates((prev) => {
+      const instances = [...prev[featureId]];
+      if (instances.length <= 1) return prev; // Keep at least one
+      
+      instances.splice(index, 1);
+      return { ...prev, [featureId]: instances };
+    });
+    
+    setActiveTag((prev) => {
+      if (prev?.featureId === featureId && prev.instanceIndex === index) return null;
+      if (prev?.featureId === featureId && prev.instanceIndex > index) {
+        return { ...prev, instanceIndex: prev.instanceIndex - 1 };
+      }
+      return prev;
+    });
+  }, []);
 
   const addAccessory = (name: string) => {
     if (viewMode === "unified") return;
@@ -691,6 +812,8 @@ export default function Page() {
               updateFeatureEnabled={updateFeatureEnabled}
               updateFeatureValue={updateFeatureValue}
               clearFeaturePoint={clearFeaturePoint}
+              addFeatureInstance={addFeatureInstance}
+              removeFeatureInstance={removeFeatureInstance}
               isProcessing={isProcessing}
               uploadedFile={uploadedFile}
               fileName={fileName}
@@ -795,31 +918,54 @@ async function readErr(res: Response): Promise<string> {
 // just after `after`. Returns null if everything required is tagged.
 function findNextUntaggedPoint(
   states: FeatureStates,
-  after: { featureId: string; pointIndex: number } | null
+  after: ActiveTag
 ): ActiveTag {
   const defs = publishedFeatures();
-  const startIdx = after
-    ? Math.max(0, defs.findIndex((d) => d.id === after.featureId))
-    : 0;
-  // First pass: continue from `after` (or the beginning).
-  for (let i = startIdx; i < defs.length; i++) {
-    const def = defs[i];
-    const st = states[def.id];
-    if (!st?.enabled) continue;
-    for (let p = 0; p < def.points.length; p++) {
-      if (after && i === startIdx && p <= after.pointIndex) continue;
-      if (st.points[p] === null) return { featureId: def.id, pointIndex: p };
-    }
-  }
-  // Second pass: wrap back around to pick up earlier untagged slots.
+  
+  // First pass: look for the next untagged point
   for (let i = 0; i < defs.length; i++) {
     const def = defs[i];
-    const st = states[def.id];
-    if (!st?.enabled) continue;
-    for (let p = 0; p < def.points.length; p++) {
-      if (st.points[p] === null) return { featureId: def.id, pointIndex: p };
+    const instances = states[def.id] || [];
+    
+    for (let instIdx = 0; instIdx < instances.length; instIdx++) {
+      const st = instances[instIdx];
+      if (!st.enabled) continue;
+      
+      for (let p = 0; p < def.points.length; p++) {
+        // If we have an 'after', skip points until we are past it
+        if (after) {
+          const isBeforeOrAtAfter = 
+            defs.findIndex(d => d.id === after.featureId) > i ||
+            (after.featureId === def.id && after.instanceIndex > instIdx) ||
+            (after.featureId === def.id && after.instanceIndex === instIdx && after.pointIndex >= p);
+          
+          if (isBeforeOrAtAfter) continue;
+        }
+        
+        if (st.points[p] === null) {
+          return { featureId: def.id, instanceIndex: instIdx, pointIndex: p };
+        }
+      }
     }
   }
+  
+  // Second pass: wrap around if we didn't find anything after 'after'
+  if (after) {
+    for (let i = 0; i < defs.length; i++) {
+      const def = defs[i];
+      const instances = states[def.id] || [];
+      for (let instIdx = 0; instIdx < instances.length; instIdx++) {
+        const st = instances[instIdx];
+        if (!st.enabled) continue;
+        for (let p = 0; p < def.points.length; p++) {
+          if (st.points[p] === null) {
+            return { featureId: def.id, instanceIndex: instIdx, pointIndex: p };
+          }
+        }
+      }
+    }
+  }
+  
   return null;
 }
 
@@ -986,9 +1132,11 @@ function StepContext(props: {
   featureStates: FeatureStates;
   activeTag: ActiveTag;
   setActiveTag: (t: ActiveTag) => void;
-  updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
-  updateFeatureValue: (featureId: string, paramId: string, value: FeatureValue) => void;
-  clearFeaturePoint: (featureId: string, pointIndex: number) => void;
+  updateFeatureEnabled: (featureId: string, instanceIndex: number, enabled: boolean) => void;
+  updateFeatureValue: (featureId: string, instanceIndex: number, paramId: string, value: FeatureValue) => void;
+  clearFeaturePoint: (featureId: string, instanceIndex: number, pointIndex: number) => void;
+  addFeatureInstance: (featureId: string) => void;
+  removeFeatureInstance: (featureId: string, index: number) => void;
   isProcessing: boolean;
   uploadedFile: File | null;
   fileName: string | null;
@@ -1025,6 +1173,8 @@ function StepContext(props: {
     updateFeatureEnabled,
     updateFeatureValue,
     clearFeaturePoint,
+    addFeatureInstance,
+    removeFeatureInstance,
     isProcessing,
     uploadedFile,
     fileName,
@@ -1102,6 +1252,8 @@ function StepContext(props: {
           updateFeatureEnabled={updateFeatureEnabled}
           updateFeatureValue={updateFeatureValue}
           clearFeaturePoint={clearFeaturePoint}
+          addFeatureInstance={addFeatureInstance}
+          removeFeatureInstance={removeFeatureInstance}
           onGenerate={generateMold}
           savedConfigs={savedConfigs}
           onLoadConfig={onLoadConfig}
@@ -1229,6 +1381,8 @@ function FeatureTagger({
   updateFeatureEnabled,
   updateFeatureValue,
   clearFeaturePoint,
+  addFeatureInstance,
+  removeFeatureInstance,
   onGenerate,
   savedConfigs,
   onLoadConfig,
@@ -1237,9 +1391,11 @@ function FeatureTagger({
   featureStates: FeatureStates;
   activeTag: ActiveTag;
   setActiveTag: (t: ActiveTag) => void;
-  updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
-  updateFeatureValue: (featureId: string, paramId: string, value: FeatureValue) => void;
-  clearFeaturePoint: (featureId: string, pointIndex: number) => void;
+  updateFeatureEnabled: (featureId: string, instanceIndex: number, enabled: boolean) => void;
+  updateFeatureValue: (featureId: string, instanceIndex: number, paramId: string, value: FeatureValue) => void;
+  clearFeaturePoint: (featureId: string, instanceIndex: number, pointIndex: number) => void;
+  addFeatureInstance: (featureId: string) => void;
+  removeFeatureInstance: (featureId: string, index: number) => void;
   onGenerate: () => void;
   savedConfigs: string[];
   onLoadConfig: (filename: string) => void;
@@ -1254,20 +1410,47 @@ function FeatureTagger({
         Enable & Place features
       </h3>
 
-      <div className="flex flex-col gap-2">
-        {defs.map((def) => (
-          <FeatureTagCard
-            key={def.id}
-            def={def}
-            state={featureStates[def.id]}
-            activeTag={activeTag}
-            setActiveTag={setActiveTag}
-            updateFeatureEnabled={updateFeatureEnabled}
-            updateFeatureValue={updateFeatureValue}
-            clearFeaturePoint={clearFeaturePoint}
-            isProcessing={isProcessing}
-          />
-        ))}
+      <div className="flex flex-col gap-5">
+        {defs.map((def) => {
+          const instances = featureStates[def.id] || [];
+          return (
+            <div key={def.id} className="flex flex-col gap-2">
+              <div className="flex items-center justify-between px-1">
+                <span className="font-mono text-[9px] text-[var(--hud-text-faint)] tracking-widest uppercase">
+                  // {def.label}
+                </span>
+                {def.allowMultiple && (
+                  <button
+                    onClick={() => addFeatureInstance(def.id)}
+                    className="flex items-center gap-1 px-1.5 py-0.5 border border-[var(--hud-line)] hover:border-[var(--hud-teal-bright)] hover:text-[var(--hud-teal-bright)] text-[var(--hud-text-dim)] transition-colors text-[9px] font-mono font-bold"
+                    title={`Add another ${def.label}`}
+                  >
+                    <Plus size={10} />
+                    <span>ADD</span>
+                  </button>
+                )}
+              </div>
+              
+              <div className="flex flex-col gap-3">
+                {instances.map((state, idx) => (
+                  <FeatureTagCard
+                    key={`${def.id}-${idx}`}
+                    def={def}
+                    state={state}
+                    instanceIndex={idx}
+                    activeTag={activeTag}
+                    setActiveTag={setActiveTag}
+                    updateFeatureEnabled={updateFeatureEnabled}
+                    updateFeatureValue={updateFeatureValue}
+                    clearFeaturePoint={clearFeaturePoint}
+                    removeInstance={instances.length > 1 ? () => removeFeatureInstance(def.id, idx) : undefined}
+                    isProcessing={isProcessing}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
       </div>
 
       <div className="sticky -bottom-3 z-20 bg-[var(--hud-panel)]/95 backdrop-blur-md px-1 py-4 -mx-3 border-t border-[var(--hud-line-strong)] shadow-[0_-4px_12px_rgba(0,0,0,0.3)] mt-2">
@@ -1288,23 +1471,28 @@ function FeatureTagger({
 function FeatureTagCard({
   def,
   state,
+  instanceIndex,
   activeTag,
   setActiveTag,
   updateFeatureEnabled,
   updateFeatureValue,
   clearFeaturePoint,
+  removeInstance,
   isProcessing,
 }: {
   def: FeatureDef;
   state: FeatureState;
+  instanceIndex: number;
   activeTag: ActiveTag;
   setActiveTag: (t: ActiveTag) => void;
-  updateFeatureEnabled: (featureId: string, enabled: boolean) => void;
-  updateFeatureValue: (featureId: string, paramId: string, value: FeatureValue) => void;
-  clearFeaturePoint: (featureId: string, pointIndex: number) => void;
+  updateFeatureEnabled: (featureId: string, instanceIndex: number, enabled: boolean) => void;
+  updateFeatureValue: (featureId: string, instanceIndex: number, paramId: string, value: FeatureValue) => void;
+  clearFeaturePoint: (featureId: string, instanceIndex: number, pointIndex: number) => void;
+  removeInstance?: () => void;
   isProcessing: boolean;
 }) {
   const { complete } = featureProgress(def, state);
+  const color = getInstanceColor(def.color, instanceIndex);
 
   // Support features with zero points (automatic features)
   const rows = def.points.length > 0 ? def.points : [null];
@@ -1317,7 +1505,9 @@ function FeatureTagCard({
     >
       {rows.map((slot, i) => {
         const active =
-          activeTag?.featureId === def.id && activeTag.pointIndex === i;
+          activeTag?.featureId === def.id && 
+          activeTag.instanceIndex === instanceIndex && 
+          activeTag.pointIndex === i;
         const coord = state.points[i];
         
         // Is this the 'primary' row for the feature? 
@@ -1342,8 +1532,10 @@ function FeatureTagCard({
                     onClick={(e) => {
                       e.stopPropagation();
                       const next = !state.enabled;
-                      updateFeatureEnabled(def.id, next);
-                      if (!next && activeTag?.featureId === def.id) setActiveTag(null);
+                      updateFeatureEnabled(def.id, instanceIndex, next);
+                      if (!next && activeTag?.featureId === def.id && activeTag.instanceIndex === instanceIndex) {
+                        setActiveTag(null);
+                      }
                     }}
                     className={`flex-1 flex items-center justify-center transition-colors ${
                       state.enabled
@@ -1360,8 +1552,8 @@ function FeatureTagCard({
                 <div
                   className="h-1 w-full"
                   style={{
-                    backgroundColor: state.enabled ? def.color : "var(--hud-line)",
-                    boxShadow: state.enabled ? `0 0 4px ${def.color}` : "none",
+                    backgroundColor: state.enabled ? color : "var(--hud-line)",
+                    boxShadow: state.enabled ? `0 0 4px ${color}` : "none",
                   }}
                 />
               </div>
@@ -1371,10 +1563,10 @@ function FeatureTagCard({
                 role="button"
                 tabIndex={0}
                 onClick={() => {
-                  if (!state.enabled) updateFeatureEnabled(def.id, true);
+                  if (!state.enabled) updateFeatureEnabled(def.id, instanceIndex, true);
                   // Only activate tagging if there are actual points to tag
                   if (def.points.length > 0) {
-                    setActiveTag({ featureId: def.id, pointIndex: i });
+                    setActiveTag({ featureId: def.id, instanceIndex, pointIndex: i });
                   }
                 }}
                 className={`flex-1 flex items-center gap-3 px-3 select-none ${
@@ -1387,6 +1579,9 @@ function FeatureTagCard({
                       active ? "text-[var(--hud-teal-bright)]" : "text-[var(--hud-text)]"
                     }`}>
                       {(isPrimary || !slot) ? def.label : slot.label}
+                      {def.allowMultiple && isPrimary && (
+                        <span className="ml-2 text-[9px] opacity-60">#{instanceIndex + 1}</span>
+                      )}
                     </span>
                     {!isPrimary && slot && (
                       <span className="font-mono text-[8.5px] text-[var(--hud-text-faint)]">
@@ -1410,32 +1605,49 @@ function FeatureTagCard({
                   )}
                 </div>
 
-                <div className="flex flex-col items-end justify-center min-w-[48px]">
-                  {state.enabled && (
+                <div className="flex items-center gap-2">
+                  <div className="flex flex-col items-end justify-center min-w-[48px]">
+                    {state.enabled && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (coord && window.confirm(`Unset ${def.label} point?`)) {
+                            clearFeaturePoint(def.id, instanceIndex, i);
+                          }
+                        }}
+                        disabled={!coord}
+                        className={`flex items-center gap-1 px-1.5 py-1 rounded-sm border transition-all ${
+                          coord || (def.points.length === 0)
+                            ? "bg-[var(--hud-green)]/10 text-[var(--hud-green)] border-[var(--hud-green)]/30 hover:bg-[var(--hud-green)]/20 cursor-pointer"
+                            : "bg-[var(--hud-red)]/10 text-[var(--hud-red)] border-[var(--hud-red)]/30 cursor-default"
+                        }`}
+                      >
+                        {coord || (def.points.length === 0) ? (
+                          <Check size={8} />
+                        ) : active ? (
+                          <Crosshair size={8} className="animate-hud-spin-slow" />
+                        ) : (
+                          <AlertCircle size={8} />
+                        )}
+                        <span className="text-[7px] font-bold uppercase tracking-wider">
+                          {coord || (def.points.length === 0) ? "SET" : "WAITING"}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
+                  {isPrimary && removeInstance && (
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        if (coord && window.confirm(`Unset ${def.label}?`)) {
-                          clearFeaturePoint(def.id, i);
+                        if (window.confirm(`Delete this ${def.label} instance?`)) {
+                          removeInstance();
                         }
                       }}
-                      disabled={!coord}
-                      className={`flex items-center gap-1 px-1.5 py-1 rounded-sm border transition-all ${
-                        coord || (def.points.length === 0)
-                          ? "bg-[var(--hud-green)]/10 text-[var(--hud-green)] border-[var(--hud-green)]/30 hover:bg-[var(--hud-green)]/20 cursor-pointer"
-                          : "bg-[var(--hud-red)]/10 text-[var(--hud-red)] border-[var(--hud-red)]/30 cursor-default"
-                      }`}
+                      className="p-1.5 text-[var(--hud-text-faint)] hover:text-[var(--hud-red)] transition-colors"
+                      title="Remove Instance"
                     >
-                      {coord || (def.points.length === 0) ? (
-                        <Check size={8} />
-                      ) : active ? (
-                        <Crosshair size={8} className="animate-hud-spin-slow" />
-                      ) : (
-                        <AlertCircle size={8} />
-                      )}
-                      <span className="text-[7px] font-bold uppercase tracking-wider">
-                        {coord || (def.points.length === 0) ? "SET" : "WAITING"}
-                      </span>
+                      <X size={12} />
                     </button>
                   )}
                 </div>
@@ -1450,7 +1662,8 @@ function FeatureTagCard({
           <FeatureParamGroup
             def={def}
             state={state}
-            onUpdate={(paramId, value) => updateFeatureValue(def.id, paramId, value)}
+            instanceIndex={instanceIndex}
+            onUpdate={(paramId, value) => updateFeatureValue(def.id, instanceIndex, paramId, value)}
             disabled={isProcessing}
           />
         </div>
@@ -2065,6 +2278,7 @@ function FeatureParamPanel({
   featureStates: FeatureStates;
   updateFeatureValue: (
     featureId: string,
+    instanceIndex: number,
     paramId: string,
     value: FeatureValue
   ) => void;
@@ -2073,19 +2287,22 @@ function FeatureParamPanel({
   return (
     <div className="flex flex-col">
       {publishedFeatures().map((def) => {
-        const state = featureStates[def.id];
-        if (!state?.enabled) return null;
-        return (
-          <FeatureParamGroup
-            key={def.id}
-            def={def}
-            state={state}
-            onUpdate={(paramId, value) =>
-              updateFeatureValue(def.id, paramId, value)
-            }
-            disabled={disabled}
-          />
-        );
+        const instances = featureStates[def.id] || [];
+        return instances.map((state, idx) => {
+          if (!state.enabled) return null;
+          return (
+            <FeatureParamGroup
+              key={`${def.id}-${idx}`}
+              def={def}
+              state={state}
+              instanceIndex={idx}
+              onUpdate={(paramId, value) =>
+                updateFeatureValue(def.id, idx, paramId, value)
+              }
+              disabled={disabled}
+            />
+          );
+        });
       })}
     </div>
   );
@@ -2094,17 +2311,21 @@ function FeatureParamPanel({
 function FeatureParamGroup({
   def,
   state,
+  instanceIndex,
   onUpdate,
   disabled,
 }: {
   def: FeatureDef;
   state: FeatureState;
+  instanceIndex: number;
   onUpdate: (paramId: string, value: FeatureValue) => void;
   disabled: boolean;
 }) {
-  const code = `§ ${def.id.toUpperCase().replace(/_/g, ".")}`;
+  const code = `§ ${def.id.toUpperCase().replace(/_/g, ".")}${def.allowMultiple ? `.${instanceIndex + 1}` : ""}`;
+  const color = getInstanceColor(def.color, instanceIndex);
+  
   return (
-    <Group title={def.label} code={code} tone="warn">
+    <Group title={`${def.label}${def.allowMultiple ? ` #${instanceIndex + 1}` : ""}`} code={code} tone="warn" style={{ "--hud-accent": color } as any}>
       {def.params.map((p) => {
         if (p.type === "number") {
           return (
@@ -2200,10 +2421,16 @@ function ViewportHUD({
 
   const { tagged, required } = publishedFeatures().reduce(
     (acc, def) => {
-      const s = featureStates[def.id];
-      if (!s?.enabled) return acc;
-      const { tagged, required } = featureProgress(def, s);
-      return { tagged: acc.tagged + tagged, required: acc.required + required };
+      const instances = featureStates[def.id] || [];
+      let t = 0;
+      let r = 0;
+      for (const s of instances) {
+        if (!s.enabled) continue;
+        const progress = featureProgress(def, s);
+        t += progress.tagged;
+        r += progress.required;
+      }
+      return { tagged: acc.tagged + t, required: acc.required + r };
     },
     { tagged: 0, required: 0 }
   );
@@ -2454,9 +2681,13 @@ function GeneratedInfo({
     ["ROTATE Z", `${globalParams.rotateZDeg}°`, "default"],
   ];
 
-  const activeFeatures = publishedFeatures().filter(
-    (d) => featureStates[d.id]?.enabled
-  );
+  const activeFeatureInstances: Array<{ def: FeatureDef; state: FeatureState; index: number }> = [];
+  for (const def of publishedFeatures()) {
+    const instances = featureStates[def.id] || [];
+    instances.forEach((state, index) => {
+      if (state.enabled) activeFeatureInstances.push({ def, state, index });
+    });
+  }
 
   return (
     <div className="bg-[var(--hud-void)]/75 backdrop-blur-sm border border-[var(--hud-line)] p-2.5 max-w-[260px] select-text pointer-events-auto">
@@ -2487,20 +2718,20 @@ function GeneratedInfo({
           </div>
         ))}
       </div>
-      {activeFeatures.map((def) => {
-        const state = featureStates[def.id];
+      {activeFeatureInstances.map(({ def, state, index }) => {
+        const color = getInstanceColor(def.color, index);
         return (
           <div
-            key={def.id}
+            key={`${def.id}-${index}`}
             className="mt-2 pt-1.5 border-t border-[var(--hud-line)]"
           >
             <div className="flex items-center gap-1.5">
               <LED state="on" />
               <span
                 className="font-display text-[9.5px] uppercase tracking-wider"
-                style={{ color: def.color }}
+                style={{ color }}
               >
-                {def.label}
+                {def.label}{def.allowMultiple ? ` #${index + 1}` : ""}
               </span>
             </div>
             <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[10px] font-mono mt-1">

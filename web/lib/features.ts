@@ -8,6 +8,7 @@
 
 import type { ComponentType } from "react";
 import type { FLF, Vec3 } from "./featuresFrame";
+import * as THREE from "three";
 
 export type NumberParam = {
   id: string;
@@ -58,7 +59,7 @@ export type FeatureState = {
   values: Record<string, FeatureValue>;
 };
 
-export type FeatureStates = Record<string, FeatureState>;
+export type FeatureStates = Record<string, FeatureState[]>;
 
 // Global pipeline parameters — not tied to any one feature.
 export type GlobalParams = {
@@ -79,6 +80,7 @@ export type GlobalParams = {
 export type FeatureOverlayProps = {
   def: FeatureDef;
   state: FeatureState;
+  color: string;
   flf: FLF;
   globalParams: GlobalParams;
 };
@@ -90,6 +92,7 @@ export type FeatureDef = {
   color: string;
   published: boolean;
   enabledByDefault: boolean;
+  allowMultiple?: boolean;
   points: FeaturePointSlot[];
   params: FeatureParam[];
   intent: FeatureIntent;
@@ -110,17 +113,48 @@ export function publishedFeatures(): FeatureDef[] {
   return FEATURES.filter((f) => f.published);
 }
 
+/**
+ * Generate a deterministic color for a feature instance based on its base color
+ * and index. 
+ */
+export function getInstanceColor(baseColor: string, index: number): string {
+  // First instance always respects the feature's defined base color
+  if (index === 0) return baseColor;
+  
+  // High-contrast secondary colors for common features
+  const upperBase = baseColor.toUpperCase();
+  
+  // If base is Teal (#5EEAD4), secondary is Electric Lime (#BFFF00)
+  if (upperBase === "#5EEAD4") return "#BFFF00";
+  
+  // If base is Red (#EF4444) or similar, secondary could be Orange or Yellow
+  if (upperBase === "#EF4444") return "#F59E0B"; // Amber/Orange
+
+  // Fallback: Deterministic shift based on base color
+  const color = new THREE.Color(baseColor);
+  const hsl = { h: 0, s: 0, l: 0 };
+  color.getHSL(hsl);
+  
+  // Shift hue and lightness for contrast
+  hsl.h = (hsl.h + (index * 0.15)) % 1;
+  hsl.l = hsl.l > 0.5 ? hsl.l - 0.2 : hsl.l + 0.2;
+  
+  return "#" + color.setHSL(hsl.h, hsl.s, hsl.l).getHexString();
+}
+
 // Build the initial FeatureStates map from the registry.
 export function initialFeatureStates(): FeatureStates {
   const out: FeatureStates = {};
   for (const def of FEATURES) {
     const values: Record<string, FeatureValue> = {};
     for (const p of def.params) values[p.id] = p.default;
-    out[def.id] = {
-      enabled: def.enabledByDefault,
-      points: def.points.map(() => null),
-      values,
-    };
+    out[def.id] = [
+      {
+        enabled: def.enabledByDefault,
+        points: def.points.map(() => null),
+        values,
+      },
+    ];
   }
   return out;
 }
@@ -136,9 +170,27 @@ export function featureProgress(def: FeatureDef, state: FeatureState) {
 export function areAllFeaturesReady(states: FeatureStates): boolean {
   for (const def of FEATURES) {
     if (!def.published) continue;
-    const s = states[def.id];
-    if (!s || !s.enabled) continue;
-    if (!featureProgress(def, s).complete) return false;
+    const instances = states[def.id];
+    if (!instances) continue;
+    
+    for (const s of instances) {
+      if (!s.enabled) continue;
+      if (!featureProgress(def, s).complete) return false;
+    }
   }
   return true;
+}
+
+// Published + enabled features with all their points tagged.
+export function isAnyFeatureReady(states: FeatureStates): boolean {
+  for (const def of FEATURES) {
+    if (!def.published) continue;
+    const instances = states[def.id];
+    if (!instances) continue;
+    
+    for (const s of instances) {
+      if (s.enabled && featureProgress(def, s).complete) return true;
+    }
+  }
+  return false;
 }

@@ -8,6 +8,7 @@ const feature: FeatureDef = {
   color: "#5eead4", // Teal (additive)
   published: true,
   enabledByDefault: true,
+  allowMultiple: true,
   intent: "additive",
   points: [
     { id: "start", label: "Starting Point" },

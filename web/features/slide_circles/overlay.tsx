@@ -4,7 +4,7 @@ import React, { useMemo } from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
-export default function SlideCirclesOverlay({ def, state, flf }: FeatureOverlayProps) {
+export default function SlideCirclesOverlay({ def, state, color, flf }: FeatureOverlayProps) {
   const outerDia = Number(state.values.outerDia ?? 10);
   const innerDia = Number(state.values.innerDia ?? 2);
   const spacing = Number(state.values.spacing ?? 15);
@@ -40,7 +40,7 @@ export default function SlideCirclesOverlay({ def, state, flf }: FeatureOverlayP
             <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, (height / 2) * zSign]}>
               <cylinderGeometry args={[outerDia / 2, outerDia / 2, height, 32]} />
               <meshBasicMaterial
-                color={def.color}
+                color={color}
                 transparent
                 opacity={0.3}
                 wireframe
@@ -50,7 +50,7 @@ export default function SlideCirclesOverlay({ def, state, flf }: FeatureOverlayP
             <mesh rotation={[Math.PI / 2, 0, 0]} position={[0, 0, ((height + 1) / 2) * zSign]}>
               <cylinderGeometry args={[innerDia / 2, innerDia / 2, height + 1, 32]} />
               <meshBasicMaterial
-                color={def.color}
+                color={color}
                 transparent
                 opacity={0.6}
                 wireframe

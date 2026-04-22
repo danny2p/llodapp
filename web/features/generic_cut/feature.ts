@@ -5,9 +5,10 @@ const feature: FeatureDef = {
   id: "generic_cut",
   label: "Generic Cut",
   description: "Rectangular extrusion to cut away mold geometry. Ideal for angled rear cuts.",
-  color: "#fde047", // Yellow (subtractive)
+  color: "#EF4444", // Red (subtractive)
   published: true,
   enabledByDefault: false,
+  allowMultiple: true,
   intent: "subtractive",
   points: [
     { id: "origin", label: "Top Corner" },

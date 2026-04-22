@@ -4,7 +4,7 @@ import React from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
-export default function GenericCutOverlay({ def, state, flf }: FeatureOverlayProps) {
+export default function GenericCutOverlay({ def, state, color, flf }: FeatureOverlayProps) {
   const w = Number(state.values.width ?? 100);
   const h = Number(state.values.height ?? 100);
   const d = Number(state.values.depth ?? 50);
@@ -40,7 +40,7 @@ export default function GenericCutOverlay({ def, state, flf }: FeatureOverlayPro
         <mesh position={pos}>
           <boxGeometry args={[w, h, d]} />
           <meshBasicMaterial
-            color={def.color}
+            color={color}
             transparent
             opacity={0.3}
             wireframe
@@ -50,7 +50,7 @@ export default function GenericCutOverlay({ def, state, flf }: FeatureOverlayPro
         {/* Origin indicator */}
         <mesh position={[ox, oy, 0]}>
           <sphereGeometry args={[1.5, 16, 16]} />
-          <meshBasicMaterial color={def.color} />
+          <meshBasicMaterial color={color} />
         </mesh>
       </group>
     </group>

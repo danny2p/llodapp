@@ -585,31 +585,39 @@ def main() -> None:
     cavity_bin = original_cavity_bin.copy()
     context = {"tg": tg, "physical_muzzle_i": physical_muzzle_i}
     
-    enabled_fids = [fid for fid, state in features_state.items() if state.get("enabled")]
+    enabled_fids = [fid for fid, state in features_state.items() if (isinstance(state, list) and any(s.get("enabled") for s in state)) or (isinstance(state, dict) and state.get("enabled"))]
     
     for idx, fid in enumerate(enabled_fids):
-        state = features_state[fid]
-        pts = state.get("points") or []
-        
-        # Only skip if the feature HAS tag slots but they are all empty.
-        # Automatic features have 0 slots (pts=[]) and should never be skipped.
-        if pts and pts[0] is None:
-            console.print(f"[yellow]{fid}: enabled but not tagged; skipping[/yellow]")
-            continue
+        instances = features_state[fid]
+        if not isinstance(instances, list):
+            instances = [instances]
             
-        emit_progress(0.65 + (idx / len(enabled_fids)) * 0.15, f"applying feature :: {fid}")
-        
         fn = appliers.get(fid)
         if fn is None:
             continue  # marker-only feature (no apply.py)
-        console.rule(f"Apply: {fid}")
-        cavity_bin, cavity_origin = fn(
-            cavity_bin, cavity_origin, args.voxel_pitch,
-            state=state,
-            insertion_vox=insertion_vox,
-            context=context,
-            console=console,
-        )
+            
+        for inst_idx, state in enumerate(instances):
+            if not state.get("enabled"):
+                continue
+                
+            pts = state.get("points") or []
+            
+            # Only skip if the feature HAS tag slots but they are all empty.
+            # Automatic features have 0 slots (pts=[]) and should never be skipped.
+            if pts and pts[0] is None:
+                console.print(f"[yellow]{fid} #{inst_idx+1}: enabled but not tagged; skipping[/yellow]")
+                continue
+                
+            emit_progress(0.65 + (idx / len(enabled_fids)) * 0.15, f"applying feature :: {fid} #{inst_idx+1}")
+            
+            console.rule(f"Apply: {fid} #{inst_idx+1}")
+            cavity_bin, cavity_origin = fn(
+                cavity_bin, cavity_origin, args.voxel_pitch,
+                state=state,
+                insertion_vox=insertion_vox,
+                context=context,
+                console=console,
+            )
 
     if cavity_bin.shape != cavity_sdf.shape:
         console.print("[yellow]feature resized grid; using binary-derived SDF[/yellow]")

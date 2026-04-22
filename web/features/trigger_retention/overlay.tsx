@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import type { FeatureOverlayProps } from "@/lib/features";
 
-export default function Overlay({ def, state, flf }: FeatureOverlayProps) {
+export default function Overlay({ def, state, color, flf }: FeatureOverlayProps) {
   const v = state.values as Record<string, number | boolean>;
   const frontOffset = v.frontOffset as number;
   const length = v.length as number;
@@ -84,7 +84,7 @@ export default function Overlay({ def, state, flf }: FeatureOverlayProps) {
         rotation={[0, 0, (rotateZDeg * Math.PI) / 180]}
       >
         <mesh geometry={geometry}>
-          <meshBasicMaterial color={def.color} transparent opacity={0.3} wireframe />
+          <meshBasicMaterial color={color} transparent opacity={0.3} wireframe />
         </mesh>
       </group>
     </group>

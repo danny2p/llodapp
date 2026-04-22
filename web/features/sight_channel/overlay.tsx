@@ -4,7 +4,7 @@ import { useMemo } from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
-export default function SightChannelOverlay({ def, state, flf }: FeatureOverlayProps) {
+export default function SightChannelOverlay({ def, state, color, flf }: FeatureOverlayProps) {
   const h = Number(state.values.height ?? 10);
   const w = Number(state.values.width ?? 4);
   const channelLength = Number(state.values.length ?? 160);
@@ -43,7 +43,7 @@ export default function SightChannelOverlay({ def, state, flf }: FeatureOverlayP
       <group rotation={[0, 0, (rz * Math.PI) / 180]}>
         <mesh geometry={geometry} position={[localX, localY, 0]}>
           <meshBasicMaterial
-            color={def.color}
+            color={color}
             transparent
             opacity={0.3}
             wireframe

@@ -15,6 +15,7 @@ import * as THREE from "three";
 import { STLLoader } from "three-stdlib";
 import {
   FEATURES,
+  getInstanceColor,
   type FeatureStates,
   type GlobalParams,
 } from "@/lib/features";
@@ -46,7 +47,7 @@ export type SceneAssets = {
   rightUrl: string;
 };
 
-export type ActiveTag = { featureId: string; pointIndex: number } | null;
+export type ActiveTag = { featureId: string; instanceIndex: number; pointIndex: number } | null;
 
 type SceneProps = {
   step: Step;
@@ -55,7 +56,7 @@ type SceneProps = {
   alignedGunUrl?: string | null;
   featureStates: FeatureStates;
   activeTag: ActiveTag;
-  onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
+  onTagPoint: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
   placedAccessories: PlacedAccessory[];
   activeAccessoryId: string | null;
   onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
@@ -83,34 +84,39 @@ function FeatureOverlays({
     <group>
       {FEATURES.filter((def) => def.published).map((def) => {
         if (!def.Overlay) return null;
-        const state = featureStates[def.id];
-        if (!state?.enabled) return null;
+        const instances = featureStates[def.id] || [];
+        
+        return instances.map((state, idx) => {
+          if (!state.enabled) return null;
 
-        // For automatic features (0 points), anchor at the provided muzzle position.
-        // For tagged features, derive frame from points.
-        let flf = flfFromPoints(state.points);
-        if (!flf && def.points.length === 0) {
-          // Additive features like sight_channel auto-anchor to the gun's top Y
-          // so their top edge lands on the slide. Non-additive automatic features
-          // stay at Y=0 and can offset as needed.
-          const anchorY = def.intent === "additive" ? gunTopY : 0;
-          flf = {
-            origin: [muzzleX, anchorY, 0],
-            R: HAS_DEFAULT_R,
-          };
-        }
+          // For automatic features (0 points), anchor at the provided muzzle position.
+          // For tagged features, derive frame from points.
+          let flf = flfFromPoints(state.points);
+          if (!flf && def.points.length === 0) {
+            // Additive features like sight_channel auto-anchor to the gun's top Y
+            // so their top edge lands on the slide. Non-additive automatic features
+            // stay at Y=0 and can offset as needed.
+            const anchorY = def.intent === "additive" ? gunTopY : 0;
+            flf = {
+              origin: [muzzleX, anchorY, 0],
+              R: HAS_DEFAULT_R,
+            };
+          }
 
-        if (!flf) return null;
-        const Overlay = def.Overlay;
-        return (
-          <Overlay
-            key={def.id}
-            def={def}
-            state={state}
-            flf={flf}
-            globalParams={globalParams}
-          />
-        );
+          if (!flf) return null;
+          const Overlay = def.Overlay;
+          const color = getInstanceColor(def.color, idx);
+          return (
+            <Overlay
+              key={`${def.id}-${idx}`}
+              def={def}
+              state={state}
+              color={color}
+              flf={flf}
+              globalParams={globalParams}
+            />
+          );
+        });
       })}
     </group>
   );
@@ -138,7 +144,7 @@ function PickingGun({
 }: {
   url: string;
   activeTag: ActiveTag;
-  onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
+  onTagPoint: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
   gunColor: string;
   meshRef: React.RefObject<THREE.Mesh | null>;
   onLoad?: (size: THREE.Vector3, center: THREE.Vector3, slideTopY: number) => void;
@@ -190,7 +196,7 @@ function PickingGun({
         if (activeTag) {
           e.stopPropagation();
           const p = e.point;
-          onTagPoint(activeTag.featureId, activeTag.pointIndex, [p.x, p.y, p.z]);
+          onTagPoint(activeTag.featureId, activeTag.instanceIndex, activeTag.pointIndex, [p.x, p.y, p.z]);
         }
       }}
     >
@@ -290,7 +296,6 @@ function Accessory({
   data: PlacedAccessory;
   isActive: boolean;
   onSelect: () => void;
-  onUpdate: (id: string, updates: Partial<PlacedAccessory>) => void;
 }) {
   const stl = useLoader(STLLoader, `${API_BASE}/accessories/${data.name}`);
   const [hovered, setHovered] = useState(false);
@@ -610,6 +615,7 @@ function FeatureMarker({
   color,
   active,
   featureId,
+  instanceIndex,
   pointIndex,
   onTagPoint,
   targetMesh,
@@ -620,8 +626,9 @@ function FeatureMarker({
   color: string;
   active: boolean;
   featureId: string;
+  instanceIndex: number;
   pointIndex: number;
-  onTagPoint: (featureId: string, pointIndex: number, coords: Vec3) => void;
+  onTagPoint: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
   targetMesh: THREE.Mesh | null;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -655,7 +662,7 @@ function FeatureMarker({
       const intersects = raycaster.intersectObject(targetMesh);
       if (intersects.length > 0) {
         const p = intersects[0].point;
-        onTagPoint(featureId, pointIndex, [p.x, p.y, p.z]);
+        onTagPoint(featureId, instanceIndex, pointIndex, [p.x, p.y, p.z]);
       }
       onDragStart();
     } else {
@@ -733,15 +740,15 @@ function BboxDebugLabels({ bounds }: { bounds: { size: THREE.Vector3; center: TH
   const midX   = center.x;
 
   const labelClass =
-    "px-2 py-1 whitespace-nowrap font-mono text-[11px] uppercase tracking-widest border bg-black/70 text-white pointer-events-none";
+    "px-1.5 py-0.5 whitespace-nowrap font-mono text-[8px] uppercase tracking-wider bg-black/50 text-white pointer-events-none rounded-sm";
 
   return (
     <group>
       <mesh position={[frontX, topY, 0]}>
         <sphereGeometry args={[2.5, 16, 16]} />
         <meshBasicMaterial color="#f59e0b" />
-        <Html position={[0, 8, 0]} center distanceFactor={160}>
-          <div className={`${labelClass} border-amber-400 text-amber-200`}>
+        <Html position={[0, 6, 0]} center distanceFactor={160}>
+          <div className={`${labelClass} text-amber-200`}>
             FRONT (+X) {frontX.toFixed(1)}
           </div>
         </Html>
@@ -750,8 +757,8 @@ function BboxDebugLabels({ bounds }: { bounds: { size: THREE.Vector3; center: TH
       <mesh position={[rearX, topY, 0]}>
         <sphereGeometry args={[2.5, 16, 16]} />
         <meshBasicMaterial color="#ef4444" />
-        <Html position={[0, 8, 0]} center distanceFactor={160}>
-          <div className={`${labelClass} border-red-400 text-red-200`}>
+        <Html position={[0, 6, 0]} center distanceFactor={160}>
+          <div className={`${labelClass} text-red-200`}>
             REAR (-X) {rearX.toFixed(1)}
           </div>
         </Html>
@@ -760,8 +767,8 @@ function BboxDebugLabels({ bounds }: { bounds: { size: THREE.Vector3; center: TH
       <mesh position={[midX, topY, 0]}>
         <sphereGeometry args={[2.5, 16, 16]} />
         <meshBasicMaterial color="#5eead4" />
-        <Html position={[0, 8, 0]} center distanceFactor={160}>
-          <div className={`${labelClass} border-teal-300 text-teal-200`}>
+        <Html position={[0, 6, 0]} center distanceFactor={160}>
+          <div className={`${labelClass} text-teal-200`}>
             SLIDE TOP {topY.toFixed(1)}
           </div>
         </Html>
@@ -770,8 +777,8 @@ function BboxDebugLabels({ bounds }: { bounds: { size: THREE.Vector3; center: TH
       <mesh position={[midX, bboxTopY, 0]}>
         <sphereGeometry args={[2.0, 16, 16]} />
         <meshBasicMaterial color="#a78bfa" />
-        <Html position={[0, 8, 0]} center distanceFactor={160}>
-          <div className={`${labelClass} border-violet-400 text-violet-200`}>
+        <Html position={[0, 6, 0]} center distanceFactor={160}>
+          <div className={`${labelClass} text-violet-200`}>
             BBOX TOP {bboxTopY.toFixed(1)}
           </div>
         </Html>
@@ -950,22 +957,29 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
       color: string;
       active: boolean;
       featureId: string;
+      instanceIndex: number;
       pointIndex: number;
     }> = [];
     for (const def of FEATURES) {
       if (!def.published) continue;
-      const state = featureStates[def.id];
-      if (!state?.enabled) continue;
-      state.points.forEach((pt, i) => {
-        if (!pt) return;
-        out.push({
-          key: `${def.id}.${i}`,
-          coords: pt,
-          color: def.color,
-          active:
-            activeTag?.featureId === def.id && activeTag.pointIndex === i,
-          featureId: def.id,
-          pointIndex: i,
+      const instances = featureStates[def.id] || [];
+      instances.forEach((state, idx) => {
+        if (!state.enabled) return;
+        const color = getInstanceColor(def.color, idx);
+        state.points.forEach((pt, i) => {
+          if (!pt) return;
+          out.push({
+            key: `${def.id}.${idx}.${i}`,
+            coords: pt,
+            color,
+            active:
+              activeTag?.featureId === def.id && 
+              activeTag.instanceIndex === idx && 
+              activeTag.pointIndex === i,
+            featureId: def.id,
+            instanceIndex: idx,
+            pointIndex: i,
+          });
         });
       });
     }
@@ -1005,13 +1019,17 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
           />
           
           {/* Visual indicator for Total Length (Insertion Depth) — entrance plane at -X side of the mold. */}
-          <mesh
-            position={[gunMuzzleX - globalParams.totalLength, gunBounds?.center.y ?? 0, 0]}
-            rotation={[0, Math.PI / 2, 0]}
-          >
-            <planeGeometry args={[100, 100]} />
-            <meshBasicMaterial color="#ef4444" transparent opacity={0.2} side={THREE.DoubleSide} />
-          </mesh>
+          <group position={[gunMuzzleX - globalParams.totalLength, gunBounds?.center.y ?? 0, 0]}>
+            <mesh rotation={[0, Math.PI / 2, 0]}>
+              <planeGeometry args={[100, 100]} />
+              <meshBasicMaterial color="#ef4444" transparent opacity={0.2} side={THREE.DoubleSide} />
+            </mesh>
+            <Html position={[0, 52, 0]} center distanceFactor={160}>
+              <div className="px-2 py-0.5 whitespace-nowrap font-mono text-[9px] font-bold uppercase tracking-widest bg-[#ef4444] text-[#030710] pointer-events-none rounded-sm shadow-[0_0_10px_rgba(239,68,68,0.3)]">
+                TOTAL LENGTH OF MOLD: {globalParams.totalLength}mm
+              </div>
+            </Html>
+          </group>
 
           {gunBounds && <BboxDebugLabels bounds={gunBounds} />}
         </>
@@ -1033,6 +1051,7 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
             color={m.color} 
             active={m.active}
             featureId={m.featureId}
+            instanceIndex={m.instanceIndex}
             pointIndex={m.pointIndex}
             onTagPoint={onTagPoint}
             targetMesh={gunMeshRef.current}

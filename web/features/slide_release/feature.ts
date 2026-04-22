@@ -8,6 +8,7 @@ const feature: FeatureDef = {
   color: "#5EEAD4",
   published: true,
   enabledByDefault: true,
+  allowMultiple: true,
   intent: "additive",
   points: [
     {

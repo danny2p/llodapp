@@ -11,7 +11,7 @@ import type { FeatureOverlayProps } from "@/lib/features";
  *   0        = no drop, square end cap.
  *   = depthZ = full diagonal from proud face to midplane.
  */
-export default function Overlay({ def, state, flf }: FeatureOverlayProps) {
+export default function Overlay({ def, state, color, flf }: FeatureOverlayProps) {
   const v = state.values as Record<string, number>;
   const width        = v.width        ?? 20;
   const depthZ       = v.depthZ       ?? 10;
@@ -106,7 +106,7 @@ export default function Overlay({ def, state, flf }: FeatureOverlayProps) {
 
   return (
     <lineSegments geometry={geo}>
-      <lineBasicMaterial color={def.color} transparent opacity={0.75} />
+      <lineBasicMaterial color={color} transparent opacity={0.75} />
     </lineSegments>
   );
 }
