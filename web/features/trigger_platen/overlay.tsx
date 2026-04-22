@@ -9,8 +9,13 @@ export default function TriggerPlatenOverlay({
   color, 
   globalParams, 
   muzzleX, 
-  gunBounds 
-}: FeatureOverlayProps) {
+  gunBounds,
+  activeTag,
+  onTagPoint,
+}: FeatureOverlayProps & {
+  activeTag?: { featureId: string; instanceIndex: number; pointIndex: number } | null;
+  onTagPoint?: (featureId: string, instanceIndex: number, pointIndex: number, coords: [number, number, number]) => void;
+}) {
   const thickness = Number(state.values.thickness ?? 4);
 
   const geometry = useMemo(() => {
@@ -48,8 +53,18 @@ export default function TriggerPlatenOverlay({
   if (!geometry) return null;
 
   return (
-    <mesh position={geometry.pos} geometry={geometry.geo}>
-      <meshBasicMaterial
+    <mesh 
+      position={geometry.pos} 
+      geometry={geometry.geo}
+      onPointerDown={(e) => {
+        if (activeTag && onTagPoint) {
+          e.stopPropagation();
+          const p = e.point;
+          onTagPoint(activeTag.featureId, activeTag.instanceIndex, activeTag.pointIndex, [p.x, p.y, p.z]);
+        }
+      }}
+    >
+      <meshStandardMaterial
         color="#d1d5db"
         transparent
         opacity={0.8}

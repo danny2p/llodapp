@@ -196,13 +196,9 @@ def export_slide_release(state, meta):
     
     res = cq.Workplane("XY").box(channel_len, w, d)
     
-    # Slide Release chamfer: only outer corners (away from Z-axis).
-    # In HAS, the midplane is Z=0. If z_sign is +, outer face is >Z. 
-    # If z_sign is -, outer face is <Z.
     if chamfer > 0.01:
         try:
             face_sel = ">Z" if z_sign > 0 else "<Z"
-            # Target the long edges (parallel to X) on the outer face
             res = res.faces(face_sel).edges("|X").chamfer(chamfer)
         except:
             pass
@@ -279,6 +275,25 @@ def export_sight_channel(state, meta):
     )
     return res.val().moved(new_plane.location)
 
+def export_nub(state, meta):
+    vals = state.get("values", {})
+    dia = float(vals.get("diameter", 5.0))
+    height = float(vals.get("height", 3.0))
+    
+    pts = state.get("points", [])
+    flf = flf_from_points(pts)
+    if not flf: return None
+    
+    # Simple cylinder aligned to local Z
+    res = cq.Workplane("XY").circle(dia / 2.0).extrude(height)
+    
+    new_plane = cq.Plane(
+        origin=cq.Vector(*flf.origin),
+        xDir=cq.Vector(*flf.R[:, 0]),
+        normal=cq.Vector(*flf.R[:, 2])
+    )
+    return res.val().moved(new_plane.location)
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-dir", type=str, required=True)
@@ -302,29 +317,6 @@ def main():
     
     assembly = cq.Assembly()
     
-    # 1. Aligned gun reference
-    if args.stl_path and Path(args.stl_path).exists():
-        try:
-            print(f"Importing gun scan STL: {args.stl_path}", flush=True)
-            gun_mesh = cq.importers.importStl(args.stl_path)
-            # Use .val() to get the Shape from the Workplane
-            assembly.add(gun_mesh.val(), name="gun_scan_mesh")
-        except Exception as e:
-            print(f"Warning: Failed to import gun STL: {e}", flush=True)
-
-    # 2. Swept cavity (the 'plug' with no features)
-    if args.plug_path and Path(args.plug_path).exists():
-        try:
-            print(f"Importing swept cavity STL: {args.plug_path}", flush=True)
-            plug_mesh = cq.importers.importStl(args.plug_path)
-            # Use .val() to get the Shape from the Workplane
-            assembly.add(plug_mesh.val(), name="mold_cavity_base")
-        except Exception as e:
-            print(f"Warning: Failed to import plug STL: {e}", flush=True)
-    else:
-        print(f"Warning: plug_path missing or invalid: {args.plug_path}", flush=True)
-
-    # 3. Procedural features
     for fid, instances in features_state.items():
         if not isinstance(instances, list):
             instances = [instances]
@@ -349,13 +341,15 @@ def main():
                 solid = export_slide_circles(state, meta)
             elif fid == "sight_channel":
                 solid = export_sight_channel(state, meta)
+            elif fid == "nub":
+                solid = export_nub(state, meta)
             
             if solid:
                 assembly.add(solid, name=f"{fid}_{idx}")
                 
     out_path = job_dir / "features.step"
     assembly.save(str(out_path), "STEP")
-    print(f"Exported CAD assembly to {out_path}")
+    print(f"Exported CAD assembly to {out_path}", flush=True)
 
 if __name__ == "__main__":
     main()

@@ -75,12 +75,16 @@ function FeatureOverlays({
   muzzleX = 0,
   gunTopY = 0,
   gunBounds,
+  activeTag,
+  onTagPoint,
 }: {
   featureStates: FeatureStates;
   globalParams: GlobalParams;
   muzzleX?: number;
   gunTopY?: number;
   gunBounds: { size: THREE.Vector3; center: THREE.Vector3; slideTopY: number } | null;
+  activeTag: ActiveTag;
+  onTagPoint: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
 }) {
   return (
     <group>
@@ -118,6 +122,8 @@ function FeatureOverlays({
               globalParams={globalParams}
               muzzleX={muzzleX}
               gunBounds={gunBounds}
+              activeTag={activeTag}
+              onTagPoint={onTagPoint}
             />
           );
         });
@@ -753,6 +759,9 @@ function FeatureMarker({
     }
   });
 
+  const isSmallFeature = featureId === "nub";
+  const s = isSmallFeature ? 0.35 : 1.0;
+
   return (
     <group 
       position={coords} 
@@ -761,37 +770,34 @@ function FeatureMarker({
       onPointerOut={() => setHovered(false)}
     >
       {showLockedHint && !active && (
-        <Html position={[0, 15, 0]} center distanceFactor={80}>
-          <div className="bg-[var(--hud-panel)] border-[3px] border-[var(--hud-amber)] px-5 py-3 whitespace-nowrap shadow-[0_0_30px_rgba(245,158,11,0.6)] animate-hud-fade-up pointer-events-none">
+        <Html position={[0, 15 * s, 0]} center distanceFactor={80}>
+          <div className="bg-[var(--hud-panel)] border-[3px] border-[var(--hud-amber)] px-5 py-3 whitespace-nowrap shadow-[0_0_30px_rgba(245,158,11,0.6)] animate-hud-fade-up pointer-events-none scale-75">
             <span className="text-[24px] font-mono font-black text-[var(--hud-amber-bright)] uppercase tracking-widest leading-none block text-center">
               [ LOCKED ]
             </span>
-            <div className="text-[18px] font-mono text-white/95 lowercase mt-2 border-t border-[var(--hud-amber)]/40 pt-2 text-center">
-              select in sidebar to move
-            </div>
           </div>
         </Html>
       )}
       <mesh>
-        <sphereGeometry args={[1.8, 16, 16]} />
+        <sphereGeometry args={[1.8 * s, 16, 16]} />
         <meshBasicMaterial color={color} transparent opacity={active ? 1 : 0.3} />
       </mesh>
       <mesh ref={pulseRef}>
-        <sphereGeometry args={[2.8, 16, 16]} />
+        <sphereGeometry args={[2.8 * s, 16, 16]} />
         <meshBasicMaterial color={color} transparent opacity={active ? 0.5 : 0.15} />
       </mesh>
       <mesh ref={ringRef} rotation={[Math.PI / 2, 0, 0]}>
-        <ringGeometry args={[3.2, 3.7, 32]} />
+        <ringGeometry args={[3.2 * s, 3.7 * s, 32]} />
         <meshBasicMaterial color={color} transparent opacity={active ? 1 : 0.25} side={THREE.DoubleSide} />
       </mesh>
       {active && (
         <>
           <mesh rotation={[0, 0, 0]}>
-            <ringGeometry args={[5.2, 5.5, 48, 1, 0, Math.PI / 3]} />
+            <ringGeometry args={[5.2 * s, 5.5 * s, 48, 1, 0, Math.PI / 3]} />
             <meshBasicMaterial color={color} transparent opacity={1} side={THREE.DoubleSide} />
           </mesh>
           <mesh rotation={[0, 0, Math.PI]}>
-            <ringGeometry args={[5.2, 5.5, 48, 1, 0, Math.PI / 3]} />
+            <ringGeometry args={[5.2 * s, 5.5 * s, 48, 1, 0, Math.PI / 3]} />
             <meshBasicMaterial color={color} transparent opacity={1} side={THREE.DoubleSide} />
           </mesh>
         </>
@@ -1093,6 +1099,8 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
             muzzleX={gunMuzzleX}
             gunTopY={gunTopY}
             gunBounds={gunBounds}
+            activeTag={activeTag}
+            onTagPoint={onTagPoint}
           />
           
           {/* Visual indicator for Total Length (Insertion Depth) — entrance plane at -X side of the mold. */}
