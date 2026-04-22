@@ -84,6 +84,11 @@ export type FeatureOverlayProps = {
   flf: FLF;
   globalParams: GlobalParams;
   muzzleX: number;
+  gunBounds: {
+    size: THREE.Vector3;
+    center: THREE.Vector3;
+    slideTopY: number;
+  } | null;
 };
 
 export type FeatureDef = {

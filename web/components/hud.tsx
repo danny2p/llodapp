@@ -96,14 +96,16 @@ export function Group({
   collapsible = true,
   defaultOpen = false,
   tone = "default",
-  }: {
+  style,
+}: {
   title: string;
   code?: string;
   children: React.ReactNode;
   collapsible?: boolean;
   defaultOpen?: boolean;
   tone?: "default" | "accent" | "warn";
-  }) {
+  style?: React.CSSProperties;
+}) {
 
   const [open, setOpen] = useState(defaultOpen);
   const barColor =
@@ -114,7 +116,12 @@ export function Group({
       : "bg-[var(--hud-line-strong)]";
 
   return (
-    <div className={`border-t border-[var(--hud-line)] first:border-t-0 transition-colors ${open ? "bg-[rgba(255,255,255,0.03)]" : "hover:bg-[rgba(255,255,255,0.015)]"}`}>
+    <div
+      style={style}
+      className={`border-t border-[var(--hud-line)] first:border-t-0 transition-colors ${
+        open ? "bg-[rgba(255,255,255,0.03)]" : "hover:bg-[rgba(255,255,255,0.015)]"
+      }`}
+    >
       <button
         type="button"
         onClick={() => collapsible && setOpen((v) => !v)}

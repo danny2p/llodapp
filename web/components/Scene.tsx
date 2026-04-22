@@ -74,11 +74,13 @@ function FeatureOverlays({
   globalParams,
   muzzleX = 0,
   gunTopY = 0,
+  gunBounds,
 }: {
   featureStates: FeatureStates;
   globalParams: GlobalParams;
   muzzleX?: number;
   gunTopY?: number;
+  gunBounds: { size: THREE.Vector3; center: THREE.Vector3; slideTopY: number } | null;
 }) {
   return (
     <group>
@@ -115,6 +117,7 @@ function FeatureOverlays({
               flf={flf}
               globalParams={globalParams}
               muzzleX={muzzleX}
+              gunBounds={gunBounds}
             />
           );
         });
@@ -1034,6 +1037,7 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
             globalParams={globalParams}
             muzzleX={gunMuzzleX}
             gunTopY={gunTopY}
+            gunBounds={gunBounds}
           />
           
           {/* Visual indicator for Total Length (Insertion Depth) — entrance plane at -X side of the mold. */}
