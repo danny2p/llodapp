@@ -88,9 +88,9 @@ export default function GenericCutOverlay({ def, state, color, flf, globalParams
   return (
     <group position={flf.origin} quaternion={quaternion}>
       {/* Visual stalk */}
-      <line geometry={stalkGeo}>
+      <lineSegments geometry={stalkGeo}>
         <lineBasicMaterial color={color} transparent opacity={0.4} />
-      </line>
+      </lineSegments>
 
       <group position={[boxPos.x, boxPos.y, 0]} rotation={localRotation}>
         <lineSegments geometry={geo}>

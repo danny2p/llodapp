@@ -533,7 +533,6 @@ function Plug({
               data={acc}
               isActive={activeAccessoryId === acc.id}
               onSelect={() => onSelectAccessory(acc.id)}
-              onUpdate={onUpdateAccessory}
             />
           ))}
       </group>
@@ -548,7 +547,6 @@ function Plug({
               data={acc}
               isActive={activeAccessoryId === acc.id}
               onSelect={() => onSelectAccessory(acc.id)}
-              onUpdate={onUpdateAccessory}
             />
           ))}
       </group>
