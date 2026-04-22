@@ -425,70 +425,127 @@ function Plug({
     const modeChanged = lastViewModeRef.current !== viewMode;
     const stepChanged = lastStepRef.current !== step;
 
-    if (stepChanged || modeChanged) {
+    if (stepChanged) {
       progressRef.current = 0;
       lastStepRef.current = step;
+    }
+    
+    if (modeChanged) {
       lastViewModeRef.current = viewMode;
     }
 
-    const duration = step === 2 ? 3.0 : 1.5;
+    // Step 2 is the "processing" simulation.
+    // Step 3 is the final results view.
+    const isResults = step === 3;
+    
+    // Durations in seconds
+    const insertDuration = 2.5;
+    const pauseDuration = 1.0;
+    const splitDuration = 1.5;
+    
+    // Total duration for Step 3
+    const totalStep3Duration = insertDuration + pauseDuration + splitDuration;
+    const duration = isResults ? totalStep3Duration : 3.0;
+
     progressRef.current = Math.min(1, progressRef.current + delta / duration);
-    const t = easeOutCubic(progressRef.current);
+    const tGlobal = progressRef.current; // Global 0..1 progress for this step
+
+    // Calculate sub-progresses for Step 3 phases
+    let tInsert = 1;
+    let tSplit = 0;
+    
+    if (isResults) {
+      const currentTime = tGlobal * totalStep3Duration;
+      
+      // Phase 1: Insertion
+      tInsert = easeOutCubic(Math.min(1, currentTime / insertDuration));
+      
+      // Phase 2: Pause (no-op, tSplit remains 0)
+      
+      // Phase 3: Split
+      if (currentTime > insertDuration + pauseDuration) {
+        const splitStartTime = insertDuration + pauseDuration;
+        tSplit = easeOutCubic(Math.min(1, (currentTime - splitStartTime) / splitDuration));
+      }
+    } else {
+      // Step 2 uses standard ease
+      tInsert = easeOutCubic(tGlobal);
+    }
 
     if (plugMeshRef.current) plugMeshRef.current.visible = step === 2;
-    if (gunRef.current) gunRef.current.visible = step === 2;
+    if (gunRef.current) gunRef.current.visible = true; // Keep gun visible to see insertion
     if (scanPlaneRef.current) scanPlaneRef.current.visible = step === 2;
 
-    const showLeft = step === 3 && (viewMode === "unified" || viewMode === "left");
-    const showRight = step === 3 && (viewMode === "unified" || viewMode === "right");
+    const showLeft = isResults && (viewMode === "unified" || viewMode === "left");
+    const showRight = isResults && (viewMode === "unified" || viewMode === "right");
     if (leftGroupRef.current) leftGroupRef.current.visible = showLeft;
     if (rightGroupRef.current) rightGroupRef.current.visible = showRight;
 
-    if (step === 2) {
-      const moldFrontX = plug.center.x + plug.size.x / 2 + 0.5;
-      const startX = -globalParams.totalLength * 1.1;
-      const endX = moldFrontX - plug.gunLeadingX;
-      const gunX = THREE.MathUtils.lerp(startX, endX, t);
-      if (gunRef.current) gunRef.current.position.x = gunX;
+    // --- GUN INSERTION LOGIC ---
+    // (Used by both Step 2 simulation and Step 3 intro)
+    const moldFrontX = plug.center.x + plug.size.x / 2 + 0.5;
+    const startX = -globalParams.totalLength * 1.1;
+    const endX = moldFrontX - plug.gunLeadingX;
+    
+    // Use tInsert for smooth movement
+    const gunX = THREE.MathUtils.lerp(startX, endX, tInsert);
+    if (gunRef.current) {
+      gunRef.current.position.x = gunX;
+      // Keep gun wireframe visible as a reference
+      if (isResults) {
+        gunMaterial.opacity = 0.25;
+      } else {
+        gunMaterial.opacity = 0.5;
+      }
+    }
 
+    if (step === 2) {
       const muzzleWorldX = gunX + plug.gunLeadingX;
       plugClipPlane.constant = muzzleWorldX;
-
-      if (scanPlaneRef.current) {
-        scanPlaneRef.current.position.x = muzzleWorldX;
-      }
+      if (scanPlaneRef.current) scanPlaneRef.current.position.x = muzzleWorldX;
 
       phaseRef.current += delta * 10;
       const pulse = (Math.sin(phaseRef.current) + 1) / 2;
       plugMaterial.emissiveIntensity = 0.1 + pulse * 0.5;
-
-      const fadeStart = 0.75;
-      gunMaterial.opacity =
-        t < fadeStart ? 1 : Math.max(0, 1 - (t - fadeStart) / (1 - fadeStart));
     }
 
-    if (step === 3) {
-      plugClipPlane.constant = 1e6;
+    // --- MOLD SPLITTING LOGIC (Step 3 only) ---
+    if (isResults) {
+      plugClipPlane.constant = 1e6; // Show full plug during split
       const sep = plug.size.z * 1.1;
 
       if (viewMode === "unified") {
         if (leftGroupRef.current) {
-          leftGroupRef.current.position.set(0, 0, -sep * t);
+          leftGroupRef.current.position.set(0, 0, -sep * tSplit);
           leftGroupRef.current.rotation.set(0, 0, 0);
         }
         if (rightGroupRef.current) {
-          rightGroupRef.current.position.set(0, 0, sep * t);
+          rightGroupRef.current.position.set(0, 0, sep * tSplit);
           rightGroupRef.current.rotation.set(0, 0, 0);
         }
+        if (gunRef.current) {
+          gunRef.current.rotation.set(0, 0, 0);
+          gunRef.current.position.z = 0;
+        }
       } else if (viewMode === "left") {
+        const rotX = THREE.MathUtils.lerp(0, Math.PI / 2, tSplit);
         if (leftGroupRef.current) {
           leftGroupRef.current.position.set(0, 0, 0);
-          leftGroupRef.current.rotation.x = THREE.MathUtils.lerp(0, Math.PI / 2, t);
+          leftGroupRef.current.rotation.x = rotX;
+        }
+        if (gunRef.current) {
+          gunRef.current.rotation.x = rotX;
+          gunRef.current.position.z = 0;
         }
       } else if (viewMode === "right") {
+        const rotX = THREE.MathUtils.lerp(0, -Math.PI / 2, tSplit);
         if (rightGroupRef.current) {
           rightGroupRef.current.position.set(0, 0, 0);
-          rightGroupRef.current.rotation.x = THREE.MathUtils.lerp(0, -Math.PI / 2, t);
+          rightGroupRef.current.rotation.x = rotX;
+        }
+        if (gunRef.current) {
+          gunRef.current.rotation.x = rotX;
+          gunRef.current.position.z = 0;
         }
       }
     }
