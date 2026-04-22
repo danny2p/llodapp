@@ -505,12 +505,19 @@ async def download_cad(job_id: str) -> FileResponse:
             raise HTTPException(status_code=500, detail="Aligned gun STL not found")
 
     # 2. Run the CAD export script
+    # Find the swept cavity STL (the 'base' plug with no features)
+    plug_path = job_dir / "base_cavity.stl"
+    if not plug_path.exists():
+        plug_path = None
+
     cmd: list[str] = [
         sys.executable,
         str(HERE / "export_cad.py"),
         "--job-dir", str(job_dir),
         "--stl-path", str(gun_path),
     ]
+    if plug_path:
+        cmd.extend(["--plug-path", str(plug_path)])
     
     try:
         _run(cmd)
@@ -534,6 +541,8 @@ async def download_cad(job_id: str) -> FileResponse:
     with zipfile.ZipFile(zip_path, 'w') as zipf:
         zipf.write(step_path, "llod_assembly.step")
         zipf.write(gun_path, "gun_scan_reference.stl")
+        if plug_path and plug_path.exists():
+            zipf.write(plug_path, "mold_cavity_reference.stl")
 
     return FileResponse(
         path=zip_path,

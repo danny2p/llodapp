@@ -599,6 +599,13 @@ def main() -> None:
             aligned.export(gun_dec_out)
         console.print(f"wrote {gun_dec_out.name} (target {args.gun_decim_target})")
 
+    # Export base cavity (no features) for CAD reference
+    emit_progress(0.62, "exporting base cavity mesh")
+    base_mesh = cavity_to_mesh(cavity_sdf, cavity_origin, args.voxel_pitch, step_size=args.mc_step_size)
+    base_out = out_dir / "base_cavity.stl"
+    base_mesh.export(base_out)
+    console.print(f"wrote {base_out.name}")
+
     # Features use the origin established during prep
     console.rule("Features")
 

@@ -35,10 +35,6 @@ def export_generic_cut(state, meta):
     
     res = cq.Workplane("XY").box(w, h, d)
     if chamfer > 0.01:
-        # Generic Cut chamfer applies to interior floor edges at front/rear (X) walls.
-        # Floor is at Z = -d/2.
-        # Find edges parallel to Y axis at Z = -d/2 and at +/- halfW
-        # In CQ box() terms, these are the edges at X limits on the bottom face.
         res = res.edges("|Y and <Z").chamfer(chamfer)
 
     R_total = flf.R
@@ -91,7 +87,6 @@ def export_gun_band(state, meta):
     offset_x      = float(vals.get("offsetX",        0.0))
     offset_y      = float(vals.get("offsetY",        0.0))
     chamfer       = float(vals.get("chamfer",        1.0))
-    chamfer_depth = float(vals.get("chamferDepth",  10.0))
 
     p0_raw = np.asarray(points[0], dtype=float) + np.array([offset_x, offset_y, 0.0])
     p1_raw = np.asarray(points[1], dtype=float) + np.array([offset_x, offset_y, 0.0])
@@ -119,13 +114,8 @@ def export_gun_band(state, meta):
     
     res = cq.Workplane("XY").polyline(poly).close().extrude(z_front_plane)
     
-    # Gun Band chamfer applies to the top and bottom outside edges.
-    # These are the edges parallel to the X axis (the width extension)
-    # at the front face (Z = z_front_plane).
     if chamfer > 0.01:
         try:
-            # Select the front face and its edges parallel to the width extension (X)
-            # These are the "top outside" and "bottom outside" edges.
             res = res.faces(">Z").edges("|X").chamfer(chamfer)
         except:
             pass
@@ -161,10 +151,8 @@ def export_trigger_retention(state, meta):
     else:
         res = cq.Workplane("XY").polyline(poly).close().extrude(depth_z, both=True)
         
-    # Trigger Retention chamfer applies to all outer edges to soften the wedge.
     if chamfer > 0.01:
         try:
-            # Soften the sharp corners of the wedge
             res = res.edges().chamfer(min(chamfer, half_w - 0.1))
         except:
             pass
@@ -208,11 +196,14 @@ def export_slide_release(state, meta):
     
     res = cq.Workplane("XY").box(channel_len, w, d)
     
-    # Slide Release chamfer applies to outer corners.
+    # Slide Release chamfer: only outer corners (away from Z-axis).
+    # In HAS, the midplane is Z=0. If z_sign is +, outer face is >Z. 
+    # If z_sign is -, outer face is <Z.
     if chamfer > 0.01:
         try:
-            # Chamfer the long edges parallel to X
-            res = res.edges("|X").chamfer(chamfer)
+            face_sel = ">Z" if z_sign > 0 else "<Z"
+            # Target the long edges (parallel to X) on the outer face
+            res = res.faces(face_sel).edges("|X").chamfer(chamfer)
         except:
             pass
 
@@ -292,6 +283,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-dir", type=str, required=True)
     parser.add_argument("--stl-path", type=str, required=False)
+    parser.add_argument("--plug-path", type=str, required=False)
     args = parser.parse_args()
     
     job_dir = Path(args.job_dir)
@@ -310,14 +302,29 @@ def main():
     
     assembly = cq.Assembly()
     
+    # 1. Aligned gun reference
     if args.stl_path and Path(args.stl_path).exists():
         try:
-            print(f"Importing gun scan STL: {args.stl_path}")
+            print(f"Importing gun scan STL: {args.stl_path}", flush=True)
             gun_mesh = cq.importers.importStl(args.stl_path)
+            # Use .val() to get the Shape from the Workplane
             assembly.add(gun_mesh.val(), name="gun_scan_mesh")
         except Exception as e:
-            print(f"Warning: Failed to import gun STL into assembly: {e}")
+            print(f"Warning: Failed to import gun STL: {e}", flush=True)
 
+    # 2. Swept cavity (the 'plug' with no features)
+    if args.plug_path and Path(args.plug_path).exists():
+        try:
+            print(f"Importing swept cavity STL: {args.plug_path}", flush=True)
+            plug_mesh = cq.importers.importStl(args.plug_path)
+            # Use .val() to get the Shape from the Workplane
+            assembly.add(plug_mesh.val(), name="mold_cavity_base")
+        except Exception as e:
+            print(f"Warning: Failed to import plug STL: {e}", flush=True)
+    else:
+        print(f"Warning: plug_path missing or invalid: {args.plug_path}", flush=True)
+
+    # 3. Procedural features
     for fid, instances in features_state.items():
         if not isinstance(instances, list):
             instances = [instances]
