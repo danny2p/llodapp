@@ -85,7 +85,8 @@ function FeatureOverlays({
   return (
     <group>
       {FEATURES.filter((def) => def.published).map((def) => {
-        if (!def.Overlay) return null;
+        const Overlay = def.Overlay;
+        if (!Overlay) return null;
         const instances = featureStates[def.id] || [];
         
         return instances.map((state, idx) => {
@@ -106,7 +107,6 @@ function FeatureOverlays({
           }
 
           if (!flf) return null;
-          const Overlay = def.Overlay;
           const color = getInstanceColor(def.color, idx);
           return (
             <Overlay
