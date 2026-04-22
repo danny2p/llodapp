@@ -189,19 +189,24 @@ function PickingGun({
   }, [meshData, onLoad]);
 
   return (
-    <mesh
-      ref={meshRef}
-      geometry={meshData.geometry}
-      onPointerDown={(e) => {
-        if (activeTag) {
-          e.stopPropagation();
-          const p = e.point;
-          onTagPoint(activeTag.featureId, activeTag.instanceIndex, activeTag.pointIndex, [p.x, p.y, p.z]);
-        }
-      }}
-    >
-      <meshStandardMaterial color={gunColor} roughness={0.4} />
-    </mesh>
+    <group>
+      <mesh
+        ref={meshRef}
+        geometry={meshData.geometry}
+        onPointerDown={(e) => {
+          if (activeTag) {
+            e.stopPropagation();
+            const p = e.point;
+            onTagPoint(activeTag.featureId, activeTag.instanceIndex, activeTag.pointIndex, [p.x, p.y, p.z]);
+          }
+        }}
+      >
+        <meshStandardMaterial color={gunColor} roughness={0.4} transparent opacity={0.5} />
+      </mesh>
+      <mesh geometry={meshData.geometry}>
+        <meshBasicMaterial color="#ffffff" wireframe transparent opacity={0.1} />
+      </mesh>
+    </group>
   );
 }
 
@@ -388,7 +393,7 @@ function Plug({
         metalness: 0.55,
         roughness: 0.35,
         transparent: true,
-        opacity: 1,
+        opacity: 0.5,
       }),
     [globalParams.gunColor]
   );
@@ -494,7 +499,12 @@ function Plug({
         castShadow
         receiveShadow
       />
-      <mesh ref={gunRef} geometry={plug.gun} material={gunMaterial} castShadow />
+      <group ref={gunRef}>
+        <mesh geometry={plug.gun} material={gunMaterial} castShadow />
+        <mesh geometry={plug.gun}>
+          <meshBasicMaterial color="#ffffff" wireframe transparent opacity={0.1} />
+        </mesh>
+      </group>
 
       {/* Laser Scanning Plane */}
       <mesh ref={scanPlaneRef} rotation={[0, Math.PI / 2, 0]}>
@@ -590,6 +600,7 @@ function ClayBlock({
           metalness={0.1}
           emissive="#5eead4"
           emissiveIntensity={0}
+          depthWrite={false}
         />
       </mesh>
       {visible && (
@@ -891,16 +902,21 @@ function ProcessingSimulation({
         totalLength={effectiveBlockWidth}
       />
 
-      <mesh ref={gunRef} geometry={centeredGun}>
-        <meshStandardMaterial
-          color={globalParams.gunColor}
-          metalness={0.6}
-          roughness={0.3}
-          emissive={globalParams.gunColor}
-          emissiveIntensity={0.2}
-          clippingPlanes={[plugClipPlane]}
-        />
-      </mesh>
+      <group ref={gunRef}>
+        <mesh geometry={centeredGun} renderOrder={100}>
+          <meshStandardMaterial
+            color={globalParams.gunColor}
+            metalness={0.6}
+            roughness={0.3}
+            emissive={globalParams.gunColor}
+            emissiveIntensity={1.0}
+            depthTest={false}
+          />
+        </mesh>
+        <mesh geometry={centeredGun} renderOrder={101}>
+          <meshBasicMaterial color="#ffffff" wireframe transparent opacity={0.15} depthTest={false} />
+        </mesh>
+      </group>
 
       <mesh ref={scanPlaneRef} rotation={[0, Math.PI / 2, 0]}>
         <planeGeometry args={[gunSize.z * 2.5, gunSize.y * 1.5]} />

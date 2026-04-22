@@ -32,6 +32,7 @@ import {
   Settings2,
   Save,
   FolderOpen,
+  Trash2,
   Check,
   AlertCircle,
 } from "lucide-react";
@@ -281,7 +282,26 @@ export default function Page() {
     a.download = configFilename;
     a.click();
     URL.revokeObjectURL(url);
-  }, [fileName, globalParams, featureStates, fetchSavedConfigs]);
+    }, [fileName, globalParams, featureStates]);
+
+    const deleteConfig = useCallback(async (filename: string) => {
+    try {
+      const res = await fetch(`${API_BASE}/api/configs/${encodeURIComponent(filename)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Failed to delete config");
+
+      const configStem = fileName ? fileName.replace(/\.stl$/i, "") : "";
+      fetchSavedConfigs(configStem);
+
+      if (activeConfigName === filename) {
+        setActiveConfigName(null);
+      }
+    } catch (e) {
+      console.error("Failed to delete config from server", e);
+    }
+    }, [fileName, activeConfigName]);
+
 
   const loadConfigData = useCallback(async (configFilename: string) => {
     try {
@@ -792,6 +812,7 @@ export default function Page() {
                 <ConfigPanel
                   savedConfigs={savedConfigs}
                   onLoadConfig={loadConfigData}
+                  onDeleteConfig={deleteConfig}
                   activeConfigName={activeConfigName}
                   isConfigOverridden={isConfigOverridden}
                   onLoadFromFile={(config) => {
@@ -2050,12 +2071,14 @@ function ConfigPanel({
   activeConfigName,
   isConfigOverridden,
   onLoadFromFile,
+  onDeleteConfig,
 }: {
   savedConfigs: string[];
   onLoadConfig: (filename: string) => void;
   activeConfigName: string | null;
   isConfigOverridden: boolean;
   onLoadFromFile: (config: Record<string, unknown>) => void;
+  onDeleteConfig: (filename: string) => void;
 }) {
   const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -2088,25 +2111,38 @@ function ConfigPanel({
           {savedConfigs.map((name) => {
             const active = activeConfigName === name;
             return (
-              <button
-                key={name}
-                onClick={() => onLoadConfig(name)}
-                className={`hud-btn text-left justify-start gap-3 relative transition-all duration-300 ${
-                  active 
-                    ? "border-white bg-white/20 shadow-[0_0_20px_rgba(255,255,255,0.4),inset_0_0_10px_rgba(255,255,255,0.2)] text-white z-10" 
-                    : "opacity-70 hover:opacity-100"
-                }`}
-                title={`Load ${name}`}
-              >
-                <span className={`truncate text-[10px] flex-1 ${active ? "font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : ""}`}>
-                  {name.replace(/-holster-config\.json$/, "")}
-                </span>
-                {active && (
-                  <span className="text-[8px] font-mono text-white absolute right-3 tracking-tighter animate-pulse bg-white/40 px-1 py-0.5 rounded-sm shadow-[0_0_15px_rgba(255,255,255,0.6)]">
-                    {isConfigOverridden ? "// ACTIVE (OVERRIDDEN)" : "// ACTIVE"}
+              <div key={name} className="group/item flex items-stretch gap-1">
+                <button
+                  onClick={() => onLoadConfig(name)}
+                  className={`hud-btn text-left justify-start gap-3 relative transition-all duration-300 flex-1 ${
+                    active 
+                      ? "border-white bg-white/20 shadow-[0_0_20px_rgba(255,255,255,0.4),inset_0_0_10px_rgba(255,255,255,0.2)] text-white z-10" 
+                      : "opacity-70 hover:opacity-100"
+                  }`}
+                  title={`Load ${name}`}
+                >
+                  <span className={`truncate text-[10px] flex-1 ${active ? "font-bold text-white drop-shadow-[0_0_8px_rgba(255,255,255,0.8)]" : ""}`}>
+                    {name.replace(/-holster-config\.json$/, "")}
                   </span>
-                )}
-              </button>
+                  {active && (
+                    <span className="text-[8px] font-mono text-white absolute right-3 tracking-tighter animate-pulse bg-white/40 px-1 py-0.5 rounded-sm shadow-[0_0_15px_rgba(255,255,255,0.6)]">
+                      {isConfigOverridden ? "// ACTIVE (OVERRIDDEN)" : "// ACTIVE"}
+                    </span>
+                  )}
+                </button>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (window.confirm(`Delete config "${name}"? This cannot be undone.`)) {
+                      onDeleteConfig(name);
+                    }
+                  }}
+                  className="w-8 shrink-0 flex items-center justify-center border border-[var(--hud-line)] hover:border-[var(--hud-red)] hover:text-[var(--hud-red)] hover:bg-[var(--hud-red)]/5 text-[var(--hud-text-faint)] transition-colors opacity-0 group-hover/item:opacity-100"
+                  title="Delete Config"
+                >
+                  <Trash2 size={11} />
+                </button>
+              </div>
             );
           })}
         </div>

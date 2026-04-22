@@ -1,27 +1,28 @@
 "use client";
 
-import React from "react";
+import React, { useMemo } from "react";
 import * as THREE from "three";
 import { type FeatureOverlayProps } from "@/lib/features";
 
 export default function GenericCutOverlay({ def, state, color, flf }: FeatureOverlayProps) {
-  const w = Number(state.values.width ?? 100);
-  const h = Number(state.values.height ?? 100);
-  const d = Number(state.values.depth ?? 50);
+  const w = Number(state.values.width ?? 7);
+  const h = Number(state.values.height ?? 7);
+  const d = Number(state.values.depth ?? 5);
   const rz = Number(state.values.rotateZ ?? 0);
+  const c = Number(state.values.chamfer ?? 1);
   const ox = Number(state.values.offsetX ?? 0);
   const oy = Number(state.values.offsetY ?? 0);
 
-  // Center of the box in FLF space:
-  // X: move by half width + offset
-  // Y: move by -half height + offset (Y is UP in Three.js)
-  // Z: 0 (centered on surface)
-  const pos = new THREE.Vector3(w / 2 + ox, -h / 2 + oy, 0);
+  // Box center calculation:
+  // Handle (0,0) is 10mm to the right of the top-right corner.
+  // Top-right corner = (-10, 0)
+  // Center = (-10 - w/2, -h/2)
+  const baseX = -10 - w / 2;
+  const baseY = -h / 2;
+  const boxPos = new THREE.Vector3(baseX + ox, baseY + oy, 0);
   
-  // Rotation matrix for local Z rotation
   const localRotation = new THREE.Euler(0, 0, (rz * Math.PI) / 180);
 
-  // Convert FLF 3x3 matrix to a 4x4 matrix for Three.js
   const matrix = new THREE.Matrix4();
   matrix.set(
     flf.R[0][0], flf.R[0][1], flf.R[0][2], 0,
@@ -31,26 +32,73 @@ export default function GenericCutOverlay({ def, state, color, flf }: FeatureOve
   );
   const quaternion = new THREE.Quaternion().setFromRotationMatrix(matrix);
 
+  // Construct a wireframe that shows the interior chamfers at front/rear X walls
+  const geo = useMemo(() => {
+    const halfW = w / 2;
+    const halfH = h / 2;
+    const halfD = d / 2;
+    
+    const verts: number[] = [];
+    const addSeg = (a: [number, number, number], b: [number, number, number]) => {
+      verts.push(...a, ...b);
+    };
+
+    // Top Ring (proud/surface)
+    const t0 = [-halfW,  halfH, halfD] as [number, number, number];
+    const t1 = [ halfW,  halfH, halfD] as [number, number, number];
+    const t2 = [ halfW, -halfH, halfD] as [number, number, number];
+    const t3 = [-halfW, -halfH, halfD] as [number, number, number];
+    
+    addSeg(t0, t1); addSeg(t1, t2); addSeg(t2, t3); addSeg(t3, t0);
+
+    // Bottom Ring (deep/interior) with chamfers at X ends
+    const b0 = [-halfW,      halfH, -halfD + c] as [number, number, number];
+    const b0i = [-halfW + c,  halfH, -halfD]     as [number, number, number];
+    const b1i = [ halfW - c,  halfH, -halfD]     as [number, number, number];
+    const b1 = [ halfW,      halfH, -halfD + c] as [number, number, number];
+
+    const b2 = [ halfW,     -halfH, -halfD + c] as [number, number, number];
+    const b2i = [ halfW - c, -halfH, -halfD]     as [number, number, number];
+    const b3i = [-halfW + c, -halfH, -halfD]     as [number, number, number];
+    const b3 = [-halfW,     -halfH, -halfD + c] as [number, number, number];
+
+    // Bottom floor outline
+    addSeg(b0, b0i); addSeg(b0i, b1i); addSeg(b1i, b1);
+    addSeg(b1, b2);
+    addSeg(b2, b2i); addSeg(b2i, b3i); addSeg(b3i, b3);
+    addSeg(b3, b0);
+
+    // Vertical segments
+    addSeg(t0, b0); addSeg(t1, b1); addSeg(t2, b2); addSeg(t3, b3);
+
+    const buffer = new THREE.BufferGeometry();
+    buffer.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+    return buffer;
+  }, [w, h, d, c]);
+
+  // Visual stalk geometry: connects handle [0,0,0] to the box center
+  const stalkGeo = useMemo(() => {
+    const buffer = new THREE.BufferGeometry();
+    buffer.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 0, boxPos.x, boxPos.y, 0], 3));
+    return buffer;
+  }, [boxPos.x, boxPos.y]);
+
   return (
-    <group
-      position={flf.origin}
-      quaternion={quaternion}
-    >
-      <group rotation={localRotation}>
-        <mesh position={pos}>
-          <boxGeometry args={[w, h, d]} />
-          <meshBasicMaterial
-            color={color}
-            transparent
-            opacity={0.3}
-            wireframe
-          />
-        </mesh>
+    <group position={flf.origin} quaternion={quaternion}>
+      {/* Visual stalk */}
+      <line geometry={stalkGeo}>
+        <lineBasicMaterial color={color} transparent opacity={0.4} />
+      </line>
+
+      <group position={[boxPos.x, boxPos.y, 0]} rotation={localRotation}>
+        <lineSegments geometry={geo}>
+          <lineBasicMaterial color={color} transparent opacity={0.6} />
+        </lineSegments>
         
-        {/* Origin indicator */}
-        <mesh position={[ox, oy, 0]}>
-          <sphereGeometry args={[1.5, 16, 16]} />
-          <meshBasicMaterial color={color} />
+        {/* Box Center indicator */}
+        <mesh>
+          <sphereGeometry args={[0.3, 8, 8]} />
+          <meshBasicMaterial color={color} transparent opacity={0.5} />
         </mesh>
       </group>
     </group>

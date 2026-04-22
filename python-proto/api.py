@@ -477,6 +477,16 @@ def get_config(filename: str) -> dict:
     return json.loads(config_path.read_text())
 
 
+@app.delete("/api/configs/{filename}")
+def delete_config(filename: str) -> dict:
+    safe_name = "".join(c if c.isalnum() or c in "-_." else "_" for c in filename)
+    config_path = CONFIGS_DIR / safe_name
+    if not config_path.exists():
+        raise HTTPException(status_code=404, detail="Config not found")
+    config_path.unlink()
+    return {"deleted": safe_name}
+
+
 app.mount("/jobs", StaticFiles(directory=JOBS_DIR), name="jobs")
 if ACCESSORIES_DIR.exists():
     app.mount("/accessories", StaticFiles(directory=ACCESSORIES_DIR), name="accessories")

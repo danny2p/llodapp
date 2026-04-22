@@ -4,22 +4,23 @@ import Overlay from "./overlay";
 const feature: FeatureDef = {
   id: "generic_cut",
   label: "Generic Cut",
-  description: "Rectangular extrusion to cut away mold geometry. Ideal for angled rear cuts.",
+  description: "Centered rectangular carve-out with adjustable front/rear interior chamfers.",
   color: "#EF4444", // Red (subtractive)
   published: true,
   enabledByDefault: false,
   allowMultiple: true,
   intent: "subtractive",
   points: [
-    { id: "origin", label: "Top Corner" },
+    { id: "anchor", label: "Anchor Point" },
   ],
   params: [
-    { id: "width",  type: "number", label: "Width",   unit: "mm", default: 100, min: 10,  max: 300, step: 1,   hint: "Length along X axis" },
-    { id: "height", type: "number", label: "Height",  unit: "mm", default: 100, min: 10,  max: 300, step: 1,   hint: "Length along Y axis" },
-    { id: "depth",  type: "number", label: "Depth",   unit: "mm", default: 50,  min: 1,   max: 200, step: 1,   hint: "Extrusion depth (Z)" },
-    { id: "rotateZ",type: "number", label: "Rotate Z",unit: "deg",default: 0,   min: -180,max: 180, step: 1,   hint: "Rotation on the surface" },
-    { id: "offsetX",type: "number", label: "Offset X",unit: "mm", default: 0,   min: -100,max: 100, step: 0.5, hint: "Move relative to click" },
-    { id: "offsetY",type: "number", label: "Offset Y",unit: "mm", default: 0,   min: -100,max: 100, step: 0.5, hint: "Move relative to click" },
+    { id: "width",    type: "number", label: "Width (X)",  unit: "mm", default: 7, min: 1,   max: 100, step: 0.5 },
+    { id: "height",   type: "number", label: "Height (Y)", unit: "mm", default: 7, min: 1,   max: 100, step: 0.5 },
+    { id: "depth",    type: "number", label: "Depth (Z)",  unit: "mm", default: 5, min: 1,   max: 50,  step: 0.5 },
+    { id: "rotateZ",  type: "number", label: "Rotation",   unit: "deg",default: 0, min: -180,max: 180, step: 1 },
+    { id: "offsetX",  type: "number", label: "Offset X",   unit: "mm", default: 0, min: -50, max: 50,  step: 0.5, hint: "Move box relative to handle." },
+    { id: "offsetY",  type: "number", label: "Offset Y",   unit: "mm", default: 0, min: -50, max: 50,  step: 0.5, hint: "Move box relative to handle." },
+    { id: "chamfer",  type: "number", label: "Chamfer",    unit: "mm", default: 1, min: 0,   max: 10,  step: 0.1, hint: "Slope at front/rear interior walls." },
   ],
   Overlay,
 };
