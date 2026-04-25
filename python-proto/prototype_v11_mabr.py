@@ -529,7 +529,8 @@ def main() -> None:
         # Pad the voxel grid in all dimensions to provide headroom for
         # offset relief channels and ensure clean mesh end-caps. Outside
         # the mesh the SDF should stay positive — use the band constant.
-        pad_mm = 15.0
+        # We increase the padding by muzzle_extension so the extended muzzle has a clean cap.
+        pad_mm = 15.0 + muzzle_extension
         pad_vox = int(np.ceil(pad_mm / args.voxel_pitch))
         outside_val = float(np.max(gun_sdf))
         gun_sdf = np.pad(gun_sdf, ((pad_vox, pad_vox),) * 3, mode="constant", constant_values=outside_val)
@@ -552,16 +553,24 @@ def main() -> None:
                 muzzle_cut_x = float(mc["points"][0][0])
                 break
         
+        muzzle_extension_vox = int(round(muzzle_extension / args.voxel_pitch))
+
         if muzzle_cut_x is not None:
             # Map world X to grid index i
             i_cut = int(round((muzzle_cut_x - origin[0]) / args.voxel_pitch))
+            logical_muzzle_vox = i_cut + muzzle_extension_vox
             if 0 <= i_cut < gun_sdf.shape[0]:
-                console.print(f"  [green]Normalizing muzzle profile from i={i_cut}[/green]")
+                console.print(f"  [green]Normalizing muzzle profile from i={i_cut} to {logical_muzzle_vox}[/green]")
                 # Capture the cross-section
                 slice_profile = gun_sdf[i_cut, :, :].copy()
-                # Extrude it forward through the rest of the grid
-                # This effectively "freezes" the muzzle shape
-                gun_sdf[i_cut:, :, :] = slice_profile[None, :, :]
+                # Extrude it forward only up to logical_muzzle_vox
+                i_end_extrude = min(gun_sdf.shape[0], logical_muzzle_vox + 1)
+                gun_sdf[i_cut:i_end_extrude, :, :] = slice_profile[None, :, :]
+                # Cap the rest of the array with outside_val to ensure a watertight mesh
+                if i_end_extrude < gun_sdf.shape[0]:
+                    gun_sdf[i_end_extrude:, :, :] = outside_val
+        else:
+            logical_muzzle_vox = muzzle_vox
 
         emit_progress(0.50, "computing swept cavity volume")
         insertion_vox = int(round(effective_total_length / args.voxel_pitch))
@@ -569,18 +578,7 @@ def main() -> None:
         # SLICING:
         # We want the mold to represent exactly 'effective_total_length'.
         # The 'end' of our model should be the normalized muzzle floor + small pad.
-        # But wait, muzzle_vox is now where the GUN ends (which might be way past the extension).
         # We want the mold to END at (original_muzzle_vox + muzzle_extension + pad).
-        
-        muzzle_extension_vox = int(round(muzzle_extension / args.voxel_pitch))
-        # The new logical muzzle is where our extruded profile ends.
-        # If normalization is on, the gun logically "ends" extension distance from i_cut.
-        if muzzle_cut_x is not None:
-            i_cut = int(round((muzzle_cut_x - origin[0]) / args.voxel_pitch))
-            logical_muzzle_vox = i_cut + muzzle_extension_vox
-        else:
-            logical_muzzle_vox = muzzle_vox
-        
         end = min(gun_sdf.shape[0], logical_muzzle_vox + pad_vox + 1)
         # Slicing backward from 'end' to capture exactly 'insertion_vox'
         start = end - insertion_vox
