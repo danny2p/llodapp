@@ -74,6 +74,8 @@ export type GlobalParams = {
   gunColor: string;
   moldColor: string;
   totalLength: number;
+  showGun: boolean;
+  showFeatures: boolean;
   featureStates?: FeatureStates;
 };
 

@@ -94,6 +94,8 @@ const DEFAULT_GLOBAL_PARAMS: GlobalParams = {
   gunColor: "#6e7480",
   moldColor: "#00e6d6",
   totalLength: 160,
+  showGun: true,
+  showFeatures: true,
 };
 
 const CAMEL_TO_SNAKE = (s: string) =>
@@ -308,7 +310,7 @@ export default function Page() {
       const res = await fetch(`${API_BASE}/api/configs/${encodeURIComponent(configFilename)}`);
       if (!res.ok) return;
       const config = await res.json();
-      if (config.globalParams) setGlobalParams(config.globalParams);
+      if (config.globalParams) setGlobalParams((prev) => ({ ...prev, ...config.globalParams }));
       if (config.featureStates) {
         // Migration: convert old Record<string, FeatureState> to Record<string, FeatureState[]>
         const migrated: FeatureStates = {};
@@ -614,6 +616,8 @@ export default function Page() {
     setProcessingLogs([]);
     setProcessingProgress(0);
     setStep(2);
+    // Disable feature sketches by default when entering the simulation/results phase
+    setGlobalParams((p) => ({ ...p, showFeatures: false }));
     try {
       const form = new FormData();
       if (uploadedFile) {
@@ -662,9 +666,7 @@ export default function Page() {
               setGeneratedGlobalParams(globalParams);
               setGeneratedFeatureStates(featureStates);
               setGeneratedFileName(uploadedFile?.name || selectedSampleName || "sample");
-              // Allow 3 seconds for the 'plunge and reveal' animation to complete 
-              // before transitioning to the split-half view.
-              window.setTimeout(() => setStep(3), 3000);
+              setStep(3);
             } else if (msg.type === "error") {
               throw new Error(
                 msg.detail.stderr || `Error ${msg.detail.code} in pipeline`
@@ -846,7 +848,7 @@ export default function Page() {
                   activeConfigName={activeConfigName}
                   isConfigOverridden={isConfigOverridden}
                   onLoadFromFile={(config) => {
-                    if (config.globalParams) setGlobalParams(config.globalParams as GlobalParams);
+                    if (config.globalParams) setGlobalParams((prev) => ({ ...prev, ...config.globalParams }));
                     if (config.featureStates)
                       setFeatureStates((prev) => ({ ...prev, ...(config.featureStates as FeatureStates) }));
                   }}
@@ -930,6 +932,7 @@ export default function Page() {
             onSetActiveAccessory={setActiveAccessoryId}
             globalParams={globalParams}
             progress={processingProgress}
+            isProcessing={isProcessing}
           />
 
           <ViewportHUD
@@ -942,6 +945,8 @@ export default function Page() {
             generatedFeatureStates={generatedFeatureStates}
             generatedFileName={generatedFileName}
             jobId={jobIdDisplay}
+            globalParams={globalParams}
+            updateGlobalParam={updateGlobalParam}
           />
         </main>
       </div>
@@ -2469,6 +2474,8 @@ function ViewportHUD({
   generatedFeatureStates,
   generatedFileName,
   jobId,
+  globalParams,
+  updateGlobalParam,
 }: {
   step: Step;
   viewMode: ViewMode;
@@ -2479,6 +2486,8 @@ function ViewportHUD({
   generatedFeatureStates: FeatureStates | null;
   generatedFileName: string | null;
   jobId: string;
+  globalParams: GlobalParams;
+  updateGlobalParam: (key: keyof GlobalParams, value: any) => void;
 }) {
   const activeSlotLabel = (() => {
     if (!activeTag) return null;
@@ -2544,20 +2553,48 @@ function ViewportHUD({
         <div className="w-2 h-2 bg-[var(--hud-teal-bright)] shadow-[0_0_6px_var(--hud-teal-bright)] opacity-30" />
       </div>
 
-      <div className="absolute top-3 left-10 flex items-center gap-3 bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line-strong)] px-3 py-1.5 pointer-events-none">
-        <div className="flex flex-col leading-none">
-          <span className="text-[8.5px] font-mono text-[var(--hud-text-faint)] tracking-wider">
-            // MODE
-          </span>
-          <span className="font-display text-[11px] uppercase tracking-[0.16em] text-[var(--hud-teal-bright)]">
-            {modeLabel}
-          </span>
-        </div>
-        {isProcessing && (
-          <div className="relative">
-            <span className="hud-led hud-led-warn" />
+      <div className="absolute top-3 left-10 flex flex-col gap-1.5 items-start pointer-events-none">
+        <div className="flex items-center gap-3 bg-[var(--hud-void)]/70 backdrop-blur-sm border border-[var(--hud-line-strong)] px-3 py-1.5">
+          <div className="flex flex-col leading-none">
+            <span className="text-[8.5px] font-mono text-[var(--hud-text-faint)] tracking-wider">
+              // MODE
+            </span>
+            <span className="font-display text-[11px] uppercase tracking-[0.16em] text-[var(--hud-teal-bright)]">
+              {modeLabel}
+            </span>
           </div>
-        )}
+          {isProcessing && (
+            <div className="relative">
+              <span className="hud-led hud-led-warn" />
+            </div>
+          )}
+        </div>
+
+        {/* Toggles under Mode box */}
+        <div className="flex flex-col gap-1 pointer-events-auto">
+          <button
+            onClick={() => updateGlobalParam("showGun", globalParams.showGun === false)}
+            className={`flex items-center gap-2 px-2 py-1 border transition-all text-[9px] font-mono uppercase tracking-wider ${
+              globalParams.showGun !== false
+                ? "bg-[var(--hud-teal)]/10 border-[var(--hud-teal)] text-[var(--hud-teal-bright)] shadow-[0_0_8px_rgba(45,212,191,0.15)]"
+                : "bg-[var(--hud-void)]/40 border-[var(--hud-line-strong)] text-[var(--hud-text-faint)]"
+            }`}
+          >
+            <div className={`w-1.5 h-1.5 rounded-full ${globalParams.showGun !== false ? "bg-[var(--hud-teal-bright)] shadow-[0_0_4px_var(--hud-teal-bright)]" : "bg-white/10"}`} />
+            Show gun scan
+          </button>
+          <button
+            onClick={() => updateGlobalParam("showFeatures", globalParams.showFeatures === false)}
+            className={`flex items-center gap-2 px-2 py-1 border transition-all text-[9px] font-mono uppercase tracking-wider ${
+              globalParams.showFeatures !== false
+                ? "bg-[var(--hud-teal)]/10 border-[var(--hud-teal)] text-[var(--hud-teal-bright)] shadow-[0_0_8px_rgba(45,212,191,0.15)]"
+                : "bg-[var(--hud-void)]/40 border-[var(--hud-line-strong)] text-[var(--hud-text-faint)]"
+            }`}
+          >
+            <div className={`w-1.5 h-1.5 rounded-full ${globalParams.showFeatures !== false ? "bg-[var(--hud-teal-bright)] shadow-[0_0_4px_var(--hud-teal-bright)]" : "bg-white/10"}`} />
+            Show Features Sketches
+          </button>
+        </div>
       </div>
 
       <div className="absolute top-3 right-3 flex flex-col items-end gap-2 pointer-events-none">

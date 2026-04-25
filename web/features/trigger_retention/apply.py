@@ -58,7 +58,7 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     for i in range(i_lo, i_hi + 1):
         gx = origin[0] + i * pitch
         for j in range(j_lo, j_hi + 1):
-            gy = origin[1] + (j + 0.5) * pitch
+            gy = origin[1] + j * pitch
             dw = np.array([gx - anchor_world[0], gy - anchor_world[1], 0.0])
             local = R_inv @ dw
             u, vv = float(local[0]), float(local[1])

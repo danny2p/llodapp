@@ -67,6 +67,7 @@ type SceneProps = {
   onSetActiveAccessory: (id: string | null) => void;
   globalParams: GlobalParams;
   progress: number;
+  isProcessing: boolean;
 };
 
 // Feature overlays — iterate the registry and render each feature's own
@@ -158,6 +159,8 @@ function PickingGun({
   meshRef,
   onLoad,
   scanMuzzleX,
+  isProcessing,
+  visible,
 }: {
   url: string;
   activeTag: ActiveTag;
@@ -166,6 +169,8 @@ function PickingGun({
   meshRef: React.RefObject<THREE.Mesh | null>;
   onLoad?: (size: THREE.Vector3, center: THREE.Vector3, slideTopY: number) => void;
   scanMuzzleX?: number;
+  isProcessing: boolean;
+  visible: boolean;
 }) {
   const geometry = useLoader(STLLoader, url);
   const meshData = useMemo(() => {
@@ -207,7 +212,7 @@ function PickingGun({
   }, [meshData, onLoad]);
 
   return (
-    <group>
+    <group visible={visible}>
       <mesh
         ref={meshRef}
         geometry={meshData.geometry}
@@ -219,10 +224,15 @@ function PickingGun({
           }
         }}
       >
-        <meshStandardMaterial color={gunColor} roughness={0.4} transparent opacity={0.5} />
+        <meshStandardMaterial 
+          color={gunColor} 
+          roughness={0.4} 
+          transparent 
+          opacity={isProcessing ? 1.0 : 0.5} 
+        />
       </mesh>
       <mesh geometry={meshData.geometry}>
-        <meshBasicMaterial color="#ffffff" wireframe transparent opacity={0.1} />
+        <meshBasicMaterial color="#ffffff" wireframe transparent opacity={isProcessing ? 0.05 : 0.1} />
       </mesh>
     </group>
   );
@@ -237,6 +247,13 @@ function MoldAssets({
   onUpdateAccessory,
   onSetActiveAccessory,
   globalParams,
+  featureStates,
+  muzzleX,
+  gunTopY,
+  gunBounds,
+  activeTag,
+  onTagPoint,
+  progress,
 }: {
   assets: SceneAssets;
   step: Step;
@@ -246,6 +263,13 @@ function MoldAssets({
   onUpdateAccessory: (id: string, updates: Partial<PlacedAccessory>) => void;
   onSetActiveAccessory: (id: string | null) => void;
   globalParams: GlobalParams;
+  featureStates: FeatureStates;
+  muzzleX: number;
+  gunTopY: number;
+  gunBounds: { size: THREE.Vector3; center: THREE.Vector3; slideTopY: number } | null;
+  activeTag: ActiveTag;
+  onTagPoint: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
+  progress: number;
 }) {
   const [full, left, right, gun] = useLoader(STLLoader, [
     assets.fullUrl,
@@ -290,7 +314,7 @@ function MoldAssets({
   return (
     <>
       <ClayBlock
-        visible={step === 2}
+        visible={step === 2 || (step === 3 && progress < (2.5 + 1.0) / (2.5 + 1.0 + 1.5))}
         sizeHint={plug.size}
         totalLength={plug.size.x}
         centerX={plug.center.x}
@@ -306,6 +330,12 @@ function MoldAssets({
           onSelectAccessory={onSetActiveAccessory}
           globalParams={globalParams}
           scanMuzzleX={assets?.scanMuzzleX ?? 0}
+          featureStates={featureStates}
+          muzzleX={muzzleX}
+          gunTopY={gunTopY}
+          gunBounds={gunBounds}
+          activeTag={activeTag}
+          onTagPoint={onTagPoint}
         />
       )}
     </>
@@ -370,6 +400,12 @@ function Plug({
   onSelectAccessory,
   globalParams,
   scanMuzzleX,
+  featureStates,
+  muzzleX,
+  gunTopY,
+  gunBounds,
+  activeTag,
+  onTagPoint,
 }: {
   step: Step;
   viewMode: ViewMode;
@@ -380,8 +416,15 @@ function Plug({
   onSelectAccessory: (id: string | null) => void;
   globalParams: GlobalParams;
   scanMuzzleX: number;
+  featureStates: FeatureStates;
+  muzzleX: number;
+  gunTopY: number;
+  gunBounds: { size: THREE.Vector3; center: THREE.Vector3; slideTopY: number } | null;
+  activeTag: ActiveTag;
+  onTagPoint: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
 }) {
   const plugMeshRef = useRef<THREE.Mesh>(null);
+  const containerRef = useRef<THREE.Group>(null);
   const gunRef = useRef<THREE.Group>(null);
   const leftGroupRef = useRef<THREE.Group>(null);
   const rightGroupRef = useRef<THREE.Group>(null);
@@ -402,6 +445,8 @@ function Plug({
         clippingPlanes: [plugClipPlane],
         emissive: globalParams.moldColor,
         emissiveIntensity: 0,
+        transparent: true,
+        opacity: 0.65,
       }),
     [plugClipPlane, globalParams.moldColor]
   );
@@ -414,7 +459,7 @@ function Plug({
         metalness: 0.55,
         roughness: 0.35,
         transparent: true,
-        opacity: 0.5,
+        opacity: 1.0,
       }),
     [globalParams.gunColor]
   );
@@ -434,6 +479,8 @@ function Plug({
         polygonOffset: true,
         polygonOffsetFactor: 1,
         polygonOffsetUnits: 1,
+        transparent: true,
+        opacity: 0.65,
       }),
     [globalParams.moldColor]
   );
@@ -485,12 +532,17 @@ function Plug({
         tSplit = easeOutCubic(Math.min(1, (currentTime - splitStartTime) / splitDuration));
       }
     } else {
-      // Step 2 uses standard ease
-      tInsert = easeOutCubic(tGlobal);
+      // Step 2: Keep everything stationary at X=0 while laser scanning pulses.
+      // Entry animation only plays once in Step 3.
+      tInsert = 1;
     }
 
-    if (plugMeshRef.current) plugMeshRef.current.visible = step === 2;
-    if (gunRef.current) gunRef.current.visible = true; // Keep gun visible to see insertion
+    if (plugMeshRef.current) {
+      plugMeshRef.current.visible = step === 2;
+      // Make mold opaque during processing simulation, semi-transparent in results
+      (plugMeshRef.current.material as THREE.MeshStandardMaterial).opacity = step === 2 ? 1.0 : 0.65;
+    }
+    if (gunRef.current) gunRef.current.visible = globalParams.showGun; // Respect persistent showGun toggle
     if (scanPlaneRef.current) scanPlaneRef.current.visible = step === 2;
 
     const showLeft = isResults && (viewMode === "unified" || viewMode === "left");
@@ -499,29 +551,32 @@ function Plug({
     if (rightGroupRef.current) rightGroupRef.current.visible = showRight;
 
     // --- GUN INSERTION LOGIC ---
-    // (Used by both Step 2 simulation and Step 3 intro)
+    // (Used by Step 3 intro to animate gun into the stationary mold)
     const startX = -globalParams.totalLength * 1.1;
     const endX = 0;
     
-    // Use tInsert for smooth movement
+    // Use tInsert for smooth movement of the gun scan only
     const gunX = THREE.MathUtils.lerp(startX, endX, tInsert);
     if (gunRef.current) {
       gunRef.current.position.x = gunX;
-      // Keep gun wireframe visible as a reference
-      if (isResults) {
-        gunMaterial.opacity = 0.25;
-      } else {
-        gunMaterial.opacity = 0.5;
-      }
+      gunMaterial.opacity = 1.0;
+    }
+    // Assembly container remains centered
+    if (containerRef.current) {
+      containerRef.current.position.x = 0;
     }
 
     if (step === 2) {
-      const muzzleWorldX = gunX + plug.gunLeadingX;
-      plugClipPlane.constant = muzzleWorldX;
-      if (scanPlaneRef.current) scanPlaneRef.current.position.x = muzzleWorldX;
+      // For Step 2, the laser plane moves across the stationary unit
+      const muzzleWorldX = plug.gunLeadingX;
+      plugClipPlane.constant = 1e6; // Don't clip during generation pulse
+      if (scanPlaneRef.current) {
+        phaseRef.current += delta * 1.2;
+        const scanT = (Math.sin(phaseRef.current) + 1) / 2;
+        scanPlaneRef.current.position.x = THREE.MathUtils.lerp(-globalParams.totalLength/2, globalParams.totalLength/2, scanT);
+      }
 
-      phaseRef.current += delta * 10;
-      const pulse = (Math.sin(phaseRef.current) + 1) / 2;
+      const pulse = (Math.sin(phaseRef.current * 8) + 1) / 2;
       plugMaterial.emissiveIntensity = 0.1 + pulse * 0.5;
     }
 
@@ -568,7 +623,7 @@ function Plug({
   });
 
   return (
-    <group>
+    <group ref={containerRef}>
       <mesh
         ref={plugMeshRef}
         geometry={plug.full}
@@ -581,6 +636,17 @@ function Plug({
         <mesh geometry={plug.gun}>
           <meshBasicMaterial color="#ffffff" wireframe transparent opacity={0.1} />
         </mesh>
+        {globalParams.showFeatures && (
+          <FeatureOverlays
+            featureStates={featureStates}
+            globalParams={globalParams}
+            muzzleX={muzzleX}
+            gunTopY={gunTopY}
+            gunBounds={gunBounds}
+            activeTag={activeTag}
+            onTagPoint={onTagPoint}
+          />
+        )}
       </group>
 
       {/* Laser Scanning Plane */}
@@ -645,7 +711,7 @@ function ClayBlock({
   useFrame(({ clock }, delta) => {
     if (!ref.current) return;
     const mat = ref.current.material as THREE.MeshStandardMaterial;
-    const target = visible ? 0.3 : 0;
+    const target = visible ? 1.0 : 0;
     mat.opacity = THREE.MathUtils.lerp(mat.opacity, target, delta * 3);
     ref.current.visible = mat.opacity > 0.01;
 
@@ -962,10 +1028,24 @@ function ProcessingSimulation({
   gunUrl,
   globalParams,
   realtimeProgress,
+  featureStates,
+  muzzleX,
+  gunTopY,
+  gunBounds,
+  activeTag,
+  onTagPoint,
+  isProcessing,
 }: {
   gunUrl: string;
   globalParams: GlobalParams;
   realtimeProgress: number;
+  featureStates: FeatureStates;
+  muzzleX: number;
+  gunTopY: number;
+  gunBounds: { size: THREE.Vector3; center: THREE.Vector3; slideTopY: number } | null;
+  activeTag: ActiveTag;
+  onTagPoint: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
+  isProcessing: boolean;
 }) {
   const gun = useLoader(STLLoader, gunUrl);
   const [gunSize, setGunSize] = useState<THREE.Vector3>(
@@ -996,10 +1076,10 @@ function ProcessingSimulation({
 
   useFrame(({ clock }, delta) => {
     if (!gunRef.current) return;
-    
+
     const speed = 0.6 + realtimeProgress * 1.5;
     phaseRef.current += delta * speed;
-    
+
     const pulseSpeed = 6 + realtimeProgress * 12;
     pulsePhaseRef.current += delta * pulseSpeed;
 
@@ -1008,7 +1088,7 @@ function ProcessingSimulation({
     const scanX = THREE.MathUtils.lerp(-halfW, halfW, t);
 
     gunRef.current.position.x = (gunSize.x - effectiveBlockWidth) / 2;
-    
+
     plugClipPlane.constant = 1e6;
 
     if (scanPlaneRef.current) {
@@ -1016,10 +1096,10 @@ function ProcessingSimulation({
       scanPlaneRef.current.rotation.set(0, Math.PI / 2, 0);
       const fade = Math.sin(t * Math.PI);
       (scanPlaneRef.current.material as THREE.MeshBasicMaterial).opacity = 0.2 + fade * 0.5;
-      
+
       (scanPlaneRef.current.material as THREE.MeshBasicMaterial).color.setHSL(
-        (170 - realtimeProgress * 50) / 360, 
-        0.7, 
+        (170 - realtimeProgress * 50) / 360,
+        0.7,
         0.6
       );
     }
@@ -1038,7 +1118,7 @@ function ProcessingSimulation({
         totalLength={effectiveBlockWidth}
       />
 
-      <group ref={gunRef}>
+      <group ref={gunRef} visible={globalParams.showGun}>
         <mesh geometry={centeredGun} renderOrder={100}>
           <meshStandardMaterial
             color={globalParams.gunColor}
@@ -1052,8 +1132,20 @@ function ProcessingSimulation({
         <mesh geometry={centeredGun} renderOrder={101}>
           <meshBasicMaterial color="#ffffff" wireframe transparent opacity={0.15} depthTest={false} />
         </mesh>
+        {gunBounds && globalParams.showFeatures && (
+          <group position={[-gunBounds.center.x, -gunBounds.center.y, -gunBounds.center.z]}>
+            <FeatureOverlays
+              featureStates={featureStates}
+              globalParams={globalParams}
+              muzzleX={muzzleX}
+              gunTopY={gunTopY}
+              gunBounds={gunBounds}
+              activeTag={activeTag}
+              onTagPoint={onTagPoint}
+            />
+          </group>
+        )}
       </group>
-
       <mesh ref={scanPlaneRef} rotation={[0, Math.PI / 2, 0]}>
         <planeGeometry args={[gunSize.z * 2.5, gunSize.y * 1.5]} />
         <meshBasicMaterial
@@ -1084,6 +1176,7 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
     onSetActiveAccessory,
     globalParams,
     progress,
+    isProcessing,
     onDraggingChanged,
   } = props;
 
@@ -1163,16 +1256,20 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
             meshRef={gunMeshRef}
             onLoad={handleGunLoad}
             scanMuzzleX={assets?.scanMuzzleX ?? 0}
+            isProcessing={isProcessing}
+            visible={globalParams.showGun}
           />
-          <FeatureOverlays
-            featureStates={featureStates}
-            globalParams={globalParams}
-            muzzleX={gunMuzzleX}
-            gunTopY={gunTopY}
-            gunBounds={gunBounds}
-            activeTag={activeTag}
-            onTagPoint={onTagPoint}
-          />
+          {globalParams.showFeatures && (
+            <FeatureOverlays
+              featureStates={featureStates}
+              globalParams={globalParams}
+              muzzleX={gunMuzzleX}
+              gunTopY={gunTopY}
+              gunBounds={gunBounds}
+              activeTag={activeTag}
+              onTagPoint={onTagPoint}
+            />
+          )}
           
           {/* Visual indicator for Total Length (Insertion Depth) — entrance plane at -X side of the mold. */}
           <group position={[gunMuzzleX - globalParams.totalLength, gunBounds?.center.y ?? 0, 0]}>
@@ -1215,6 +1312,13 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
           gunUrl={alignedGunUrl}
           globalParams={globalParams}
           realtimeProgress={progress}
+          featureStates={featureStates}
+          muzzleX={gunMuzzleX}
+          gunTopY={gunTopY}
+          gunBounds={gunBounds}
+          activeTag={activeTag}
+          onTagPoint={onTagPoint}
+          isProcessing={isProcessing}
         />
       )}
 
@@ -1245,6 +1349,13 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
           onUpdateAccessory={onUpdateAccessory}
           onSetActiveAccessory={onSetActiveAccessory}
           globalParams={globalParams}
+          featureStates={featureStates}
+          muzzleX={gunMuzzleX}
+          gunTopY={gunTopY}
+          gunBounds={gunBounds}
+          activeTag={activeTag}
+          onTagPoint={onTagPoint}
+          progress={progress}
         />
       )}
     </>
