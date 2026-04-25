@@ -380,8 +380,6 @@ def main():
                 solid = export_sight_channel(state, meta)
             elif fid == "nub":
                 solid = export_nub(state, meta)
-            elif fid == "muzzle_cut":
-                solid = export_muzzle_cut(state, meta, args.stl_path)
             
             if solid:
                 assembly.add(solid, name=f"{fid}_{idx}")
