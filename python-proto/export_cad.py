@@ -61,8 +61,9 @@ def export_trigger_platen(state, meta):
     muzzle_x = meta["muzzle_x"]
     y_min = meta["y_min"]
     y_max = meta["y_max"]
+    muzzle_extension = meta.get("muzzle_extension", 0.0)
     
-    w = max(1.0, total_length - 30.0)
+    w = max(1.0, (total_length - 30.0) + muzzle_extension)
     h = max(1.0, (y_max - 15.0) - y_min)
     d = thickness
     
