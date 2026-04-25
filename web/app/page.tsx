@@ -310,7 +310,7 @@ export default function Page() {
       const res = await fetch(`${API_BASE}/api/configs/${encodeURIComponent(configFilename)}`);
       if (!res.ok) return;
       const config = await res.json();
-      if (config.globalParams) setGlobalParams((prev) => ({ ...prev, ...config.globalParams }));
+      if (config.globalParams) setGlobalParams((prev) => ({ ...prev, ...(config.globalParams as Partial<GlobalParams>) }));
       if (config.featureStates) {
         // Migration: convert old Record<string, FeatureState> to Record<string, FeatureState[]>
         const migrated: FeatureStates = {};
@@ -848,7 +848,7 @@ export default function Page() {
                   activeConfigName={activeConfigName}
                   isConfigOverridden={isConfigOverridden}
                   onLoadFromFile={(config) => {
-                    if (config.globalParams) setGlobalParams((prev) => ({ ...prev, ...config.globalParams }));
+                    if (config.globalParams) setGlobalParams((prev) => ({ ...prev, ...(config.globalParams as Partial<GlobalParams>) }));
                     if (config.featureStates)
                       setFeatureStates((prev) => ({ ...prev, ...(config.featureStates as FeatureStates) }));
                   }}
