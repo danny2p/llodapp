@@ -141,9 +141,9 @@ def export_trigger_retention(state, meta):
     
     half_w = width_y / 2.0
     poly = [
-        (front_offset, y_offset + half_w),
-        (front_offset, y_offset - half_w),
-        (front_offset + length, y_offset)
+        (0.0, half_w),
+        (0.0, -half_w),
+        (length, 0.0)
     ]
     
     if one_side:
@@ -164,8 +164,12 @@ def export_trigger_retention(state, meta):
         [0,            0,           1]
     ])
     R_final = np.dot(flf.R, R_local)
+    
+    # Offset is translated by FLF rotation (not local rotation), matching the UI
+    anchor_world = flf.origin + np.dot(flf.R, np.array([front_offset, y_offset, 0.0]))
+    
     new_plane = cq.Plane(
-        origin=cq.Vector(*flf.origin),
+        origin=cq.Vector(*anchor_world),
         xDir=cq.Vector(*R_final[:, 0]),
         normal=cq.Vector(*R_final[:, 2])
     )
@@ -294,6 +298,38 @@ def export_nub(state, meta):
     )
     return res.val().moved(new_plane.location)
 
+def export_muzzle_cut(state, meta, stl_path=None):
+    vals = state.get("values", {})
+    extension = float(vals.get("extension", 30.0))
+    pts = state.get("points", [])
+    if not pts or pts[0] is None: return None
+    
+    cut_x = float(pts[0][0])
+    
+    # Approximate muzzle footprint using a box matching the mesh bounding box at cut_x
+    w_y, w_z = 40.0, 30.0 # Fallbacks
+    center_y, center_z = 0.0, 0.0
+    
+    if stl_path and os.path.exists(stl_path):
+        try:
+            import trimesh
+            mesh = trimesh.load_mesh(stl_path, process=False)
+            mask = np.abs(mesh.vertices[:, 0] - cut_x) < 1.0
+            if np.any(mask):
+                v_slice = mesh.vertices[mask]
+                ymin, zmin = v_slice[:, 1].min(), v_slice[:, 2].min()
+                ymax, zmax = v_slice[:, 1].max(), v_slice[:, 2].max()
+                w_y = (ymax - ymin) + 2.0
+                w_z = (zmax - zmin) + 2.0
+                center_y = (ymin + ymax) / 2.0
+                center_z = (zmin + zmax) / 2.0
+        except Exception as e:
+            print(f"Warning: failed to compute muzzle footprint: {e}", flush=True)
+
+    pos_x = cut_x + extension / 2.0
+    res = cq.Workplane("XY").box(extension, w_y, w_z)
+    return res.translate((pos_x, center_y, center_z)).val()
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--job-dir", type=str, required=True)
@@ -343,6 +379,8 @@ def main():
                 solid = export_sight_channel(state, meta)
             elif fid == "nub":
                 solid = export_nub(state, meta)
+            elif fid == "muzzle_cut":
+                solid = export_muzzle_cut(state, meta, args.stl_path)
             
             if solid:
                 assembly.add(solid, name=f"{fid}_{idx}")

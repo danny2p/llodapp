@@ -39,7 +39,8 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
 
     # Anchor of the wedge's base edge in world coords (local frame offset of
     # (frontOffset, yOffset, 0) from FLF origin).
-    anchor_world = flf.origin + R_total @ np.array([front_offset_mm, y_offset_mm, 0.0])
+    # The offset should NOT be rotated by rotateZDeg, matching the UI overlay.
+    anchor_world = flf.origin + flf.R @ np.array([front_offset_mm, y_offset_mm, 0.0])
 
     r = min(corner_radius, half_w * 0.9, length_mm * 0.5)
     hyp = np.sqrt(half_w ** 2 + length_mm ** 2)
