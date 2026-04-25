@@ -96,8 +96,10 @@ async def _run_stream(cmd: list[str]):
                         last_p = data['p']
                 except:
                     pass
-            # Optional: Log other output to stderr for debugging
-            # else: print(f"SUBPROCESS: {line.strip()}")
+            else:
+                clean_line = line.strip()
+                if clean_line:
+                    yield {"type": "log", "data": clean_line}
 
     return_code = process.wait()
     if return_code != 0:
@@ -318,6 +320,9 @@ async def process_stream(
         if tg_json.exists():
             tg_anchor = json.loads(tg_json.read_text())
 
+        meta_json = job_dir / "meta.json"
+        meta = json.loads(meta_json.read_text()) if meta_json.exists() else {}
+
         def url(p: Path) -> str:
             return f"/jobs/{job_id}/{p.name}"
 
@@ -328,6 +333,12 @@ async def process_stream(
             "leftUrl": url(left_path),
             "rightUrl": url(right_path),
             "tgAnchor": tg_anchor,
+            "muzzleX": meta.get("muzzle_x"),
+            "scanMuzzleX": meta.get("scan_muzzle_x", meta.get("muzzle_x")),
+            "muzzleExtension": meta.get("muzzle_extension", 0.0),
+            "yMin": meta.get("y_min", 0.0),
+            "yMax": meta.get("y_max", 0.0),
+            "slideTopY": meta.get("slide_top_y", 0.0),
         }
 
         yield json.dumps({"type": "result", "data": result}) + "\n"
@@ -399,6 +410,9 @@ async def process(
     if tg_json.exists():
         tg_anchor = json.loads(tg_json.read_text())
 
+    meta_json = job_dir / "meta.json"
+    meta = json.loads(meta_json.read_text()) if meta_json.exists() else {}
+
     def url(p: Path) -> str:
         return f"/jobs/{job_id}/{p.name}"
 
@@ -409,6 +423,12 @@ async def process(
         "leftUrl": url(left_path),
         "rightUrl": url(right_path),
         "tgAnchor": tg_anchor,
+        "muzzleX": meta.get("muzzle_x"),
+        "scanMuzzleX": meta.get("scan_muzzle_x", meta.get("muzzle_x")),
+        "muzzleExtension": meta.get("muzzle_extension", 0.0),
+        "yMin": meta.get("y_min", 0.0),
+        "yMax": meta.get("y_max", 0.0),
+        "slideTopY": meta.get("slide_top_y", 0.0),
     }
 
 
@@ -428,6 +448,12 @@ async def download_merged(
         full_path = _one(job_dir, f"*_swept_mabr_*.stl")
     except HTTPException:
         raise HTTPException(status_code=404, detail=f"Base or full STL not found for job {job_id}")
+
+    meta_json = job_dir / "meta.json"
+    meta = json.loads(meta_json.read_text()) if meta_json.exists() else {}
+    # Accessories are tagged relative to the actual firearm scan.
+    # Use scan_muzzle_x for proper reference.
+    scan_muzzle_x = meta.get("scan_muzzle_x", meta.get("muzzle_x", 80.0))
 
     # Output path
     out_name = f"merged_{side}_{uuid.uuid4().hex[:8]}.stl"
@@ -485,6 +511,70 @@ def delete_config(filename: str) -> dict:
         raise HTTPException(status_code=404, detail="Config not found")
     config_path.unlink()
     return {"deleted": safe_name}
+
+
+@app.get("/api/download-cad/{job_id}")
+async def download_cad(job_id: str) -> FileResponse:
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+
+    print(f"Exporting CAD for job {job_id}...", flush=True)
+
+    # 1. Find the aligned gun STL to pass it to the script
+    try:
+        gun_path = _one(job_dir, "*_mabr_aligned_decim*.stl")
+    except HTTPException:
+        try:
+            gun_path = _one(job_dir, "*_mabr_aligned.stl")
+        except HTTPException:
+            raise HTTPException(status_code=500, detail="Aligned gun STL not found")
+
+    # 2. Run the CAD export script
+    # Find the swept cavity STL (the 'base' plug with no features)
+    plug_path = job_dir / "base_cavity.stl"
+    if not plug_path.exists():
+        plug_path = None
+
+    cmd: list[str] = [
+        sys.executable,
+        str(HERE / "export_cad.py"),
+        "--job-dir", str(job_dir),
+        "--stl-path", str(gun_path),
+    ]
+    if plug_path:
+        cmd.extend(["--plug-path", str(plug_path)])
+    
+    try:
+        _run(cmd)
+    except HTTPException as e:
+        print(f"CAD Export failed: {e.detail}", flush=True)
+        raise e
+    except Exception as e:
+        print(f"Unexpected CAD Export error: {str(e)}", flush=True)
+        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
+
+    step_path = job_dir / "features.step"
+    if not step_path.exists():
+        print(f"Error: {step_path} missing after export script finished", flush=True)
+        raise HTTPException(status_code=500, detail="CAD export failed to produce features.step")
+
+    # 3. Create a ZIP file
+    zip_name = f"llod_export_{job_id}.zip"
+    zip_path = job_dir / zip_name
+    
+    import zipfile
+    with zipfile.ZipFile(zip_path, 'w') as zipf:
+        zipf.write(step_path, "llod_assembly.step")
+        zipf.write(gun_path, "gun_scan_reference.stl")
+        if plug_path and plug_path.exists():
+            zipf.write(plug_path, "mold_cavity_reference.stl")
+
+    return FileResponse(
+        path=zip_path,
+        filename=zip_name,
+        media_type="application/zip",
+    )
 
 
 app.mount("/jobs", StaticFiles(directory=JOBS_DIR), name="jobs")

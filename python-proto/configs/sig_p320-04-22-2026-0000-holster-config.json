@@ -1,0 +1,203 @@
+{
+  "filename": "sig_p320-04-22-2026-0000-holster-config.json",
+  "stlStem": "sig_p320",
+  "savedAt": "2026-04-22T06:00:04.487Z",
+  "globalParams": {
+    "voxelPitch": 0.25,
+    "mcStepSize": 2,
+    "smoothSigma": 0.8,
+    "smoothIter": 10,
+    "plugDecimTarget": 60000,
+    "gunDecimTarget": 60000,
+    "mirror": false,
+    "rotateZDeg": 0,
+    "gunColor": "#6e7480",
+    "moldColor": "#00e6d6",
+    "totalLength": 160
+  },
+  "featureStates": {
+    "trigger_retention": [
+      {
+        "enabled": true,
+        "points": [
+          [
+            32.9944397608931,
+            13.78348654651387,
+            -6.788816118976911
+          ]
+        ],
+        "values": {
+          "frontOffset": 4,
+          "length": 23,
+          "widthY": 14,
+          "depthZ": 2.9,
+          "yOffset": 0,
+          "rotateZDeg": 15,
+          "cornerRadius": 3,
+          "oneSide": false
+        }
+      }
+    ],
+    "slide_release": [
+      {
+        "enabled": true,
+        "points": [
+          [
+            16.603081625560428,
+            36.83184170467442,
+            -12.292578052136605
+          ]
+        ],
+        "values": {
+          "widthY": 12,
+          "depthZ": 6,
+          "yOffset": 0,
+          "chamfer": 2
+        }
+      },
+      {
+        "enabled": true,
+        "points": [
+          [
+            21.59420629644841,
+            39.90899667486766,
+            11.352328883741222
+          ]
+        ],
+        "values": {
+          "widthY": 12,
+          "depthZ": 6,
+          "yOffset": 0,
+          "chamfer": 2
+        }
+      }
+    ],
+    "ejection_port": [
+      {
+        "enabled": false,
+        "points": [
+          null
+        ],
+        "values": {}
+      }
+    ],
+    "generic_cut": [
+      {
+        "enabled": false,
+        "points": [
+          null
+        ],
+        "values": {
+          "width": 10,
+          "height": 6,
+          "depth": 5,
+          "rotateZ": 2,
+          "offsetX": 0,
+          "offsetY": 0,
+          "chamfer": 2.8
+        }
+      }
+    ],
+    "trigger_platen": [
+      {
+        "enabled": true,
+        "points": [],
+        "values": {
+          "thickness": 4
+        }
+      }
+    ],
+    "slide_circles": [
+      {
+        "enabled": true,
+        "points": [
+          [
+            64.84462095227052,
+            49.34510111528824,
+            11.189206445884167
+          ]
+        ],
+        "values": {
+          "outerDia": 10,
+          "innerDia": 2,
+          "spacing": 15,
+          "height": 6,
+          "rotateZ": 0
+        }
+      }
+    ],
+    "sight_channel": [
+      {
+        "enabled": true,
+        "points": [],
+        "values": {
+          "length": 160,
+          "height": 10,
+          "width": 6,
+          "offsetX": 0,
+          "offsetY": 0,
+          "rotateZ": 0
+        }
+      }
+    ],
+    "gun_band": [
+      {
+        "enabled": true,
+        "points": [
+          [
+            -18.45449975466766,
+            60.94659983802242,
+            9.655794879633646
+          ],
+          [
+            -49.98628944785395,
+            -60.977784274214045,
+            12.789420531733015
+          ]
+        ],
+        "values": {
+          "gripAngle": 14.5,
+          "width": 20,
+          "depthZ": 10,
+          "extendTop": 12,
+          "extendBottom": 0,
+          "offsetX": -3,
+          "offsetY": 0,
+          "chamfer": 15,
+          "chamferDepth": 15
+        }
+      }
+    ],
+    "muzzle_cut": [
+      {
+        "enabled": true,
+        "points": [
+          [
+            71.1022635305297,
+            51.665800102291975,
+            10.911468692587619
+          ]
+        ],
+        "values": {
+          "extension": 30
+        }
+      }
+    ],
+    "nub": [
+      {
+        "enabled": true,
+        "points": [
+          [
+            51.447087515926526,
+            -5.03079760232319,
+            4
+          ]
+        ],
+        "values": {
+          "diameter": 2,
+          "height": 2
+        }
+      }
+    ]
+  }
+}

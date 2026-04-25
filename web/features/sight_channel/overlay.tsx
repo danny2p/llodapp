@@ -7,10 +7,16 @@ import { type FeatureOverlayProps } from "@/lib/features";
 export default function SightChannelOverlay({ def, state, color, flf, globalParams, muzzleX }: FeatureOverlayProps) {
   const h = Number(state.values.height ?? 10);
   const w = Number(state.values.width ?? 4);
-  const channelLength = Number(state.values.length ?? 160);
   const ox = Number(state.values.offsetX ?? -19);
   const oy = Number(state.values.offsetY ?? 0);
   const rz = Number(state.values.rotateZ ?? 0);
+
+  // Check for muzzle extension
+  const mcState = globalParams.featureStates?.["muzzle_cut"]?.[0];
+  const mcExt = (mcState?.enabled && mcState?.values?.extension) ? Number(mcState.values.extension) : 0;
+  
+  const baseLength = Number(state.values.length ?? 160);
+  const channelLength = baseLength + mcExt;
 
   // flf.origin.y is the gun's top Y (auto-anchored). Anchor the channel's
   // BOTTOM edge at origin.y + oy so height grows upward from the slide top.

@@ -357,13 +357,16 @@ def _load_prep_cache(cache_base: Path, key: str):
     insertion_vox = int(meta["insertion_vox"])
     physical_muzzle_i = int(meta.get("physical_muzzle_i", 0))
     tg = meta.get("tg")
+    y_min = float(meta.get("y_min", 0.0))
+    y_max = float(meta.get("y_max", 0.0))
+    slide_top_y = float(meta.get("slide_top_y", y_max))
     if tg is not None:
         tg = {k: (np.asarray(v) if isinstance(v, list) else v) for k, v in tg.items()}
     aligned = trimesh.load_mesh(entry / "aligned.stl", process=True)
-    return aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i
+    return aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i, y_min, y_max, slide_top_y
 
 
-def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i: int) -> None:
+def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, insertion_vox, tg, physical_muzzle_i: int, y_min: float, y_max: float, slide_top_y: float) -> None:
     entry = cache_base / key
     entry.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(entry / "grids.npz", cavity_sdf=cavity_sdf, origin=origin)
@@ -374,6 +377,9 @@ def _save_prep_cache(cache_base: Path, key: str, aligned, cavity_sdf, origin, in
         "insertion_vox": insertion_vox,
         "physical_muzzle_i": physical_muzzle_i,
         "tg": tg_json,
+        "y_min": y_min,
+        "y_max": y_max,
+        "slide_top_y": slide_top_y,
     }))
     aligned.export(entry / "aligned.stl")
     (entry / "ok").write_text("ok")  # marker; half-written entries have no "ok"
@@ -427,6 +433,21 @@ def main() -> None:
             features_state = json.load(f)
 
     appliers = load_appliers()
+    
+    # Initialize effective total length early for cache/meta consistency
+    fs = features_state
+    muzzle_extension = 0.0
+    mc_instances = fs.get("muzzle_cut", [])
+    if isinstance(mc_instances, dict): mc_instances = [mc_instances]
+    for mc in mc_instances:
+        if mc.get("enabled"):
+            muzzle_extension = float(mc.get("values", {}).get("extension", 30.0))
+            break
+
+    # The mold extends its total length to accommodate the muzzle cut.
+    effective_total_length = args.total_length + muzzle_extension
+    insertion_vox = int(round(effective_total_length / args.voxel_pitch))
+
 
     console = Console()
     def emit_progress(p: float, label: str):
@@ -448,9 +469,19 @@ def main() -> None:
     if cached is not None:
         emit_progress(0.60, "prep cache hit :: loading grids")
         console.rule("Prep cache hit")
-        aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i = cached
+        aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i, y_min_world, y_max_world, slide_top_y = cached
         console.print(f"key: {cache_key}  ({cache_base})")
         console.print(f"aligned: {len(aligned.faces):,} faces; cavity_sdf: {cavity_sdf.shape}; tg: {'yes' if tg else 'no'}")
+        
+        # Recalculate muzzle world positions from cached indices
+        # logical_muzzle_vox was original_muzzle + extension
+        # We need original muzzle_vox to find extension part.
+        # But meta.json in cache already has 'physical_muzzle_i' which is the logical one.
+        logical_muzzle_x = cavity_origin[0] + physical_muzzle_i * args.voxel_pitch
+        
+        # Try to recover original scan muzzle
+        muzzle_extension_vox = int(round(muzzle_extension / args.voxel_pitch))
+        scan_muzzle_x = logical_muzzle_x - (muzzle_extension_vox * args.voxel_pitch)
     else:
         raw: trimesh.Trimesh = trimesh.load_mesh(input_path, process=True)
         raw.merge_vertices()
@@ -497,7 +528,7 @@ def main() -> None:
         # Pad the voxel grid in all dimensions to provide headroom for
         # offset relief channels and ensure clean mesh end-caps. Outside
         # the mesh the SDF should stay positive — use the band constant.
-        pad_mm = 15.0
+        pad_mm = 15.0 + muzzle_extension
         pad_vox = int(np.ceil(pad_mm / args.voxel_pitch))
         outside_val = float(np.max(gun_sdf))
         gun_sdf = np.pad(gun_sdf, ((pad_vox, pad_vox),) * 3, mode="constant", constant_values=outside_val)
@@ -510,15 +541,45 @@ def main() -> None:
         # Muzzle is at MAX i in the gun_sdf (due to orient_muzzle_high)
         muzzle_vox = int(phys_occupied_i.max()) if len(phys_occupied_i) > 0 else 0
 
+        # --- NEW: Muzzle Normalization (Preprocessing) ---
+        fs = features_state
+        muzzle_cut_x = None
+        mc_instances = fs.get("muzzle_cut", [])
+        if isinstance(mc_instances, dict): mc_instances = [mc_instances]
+        for mc in mc_instances:
+            if mc.get("enabled") and mc.get("points"):
+                muzzle_cut_x = float(mc["points"][0][0])
+                break
+        
+        muzzle_extension_vox = int(round(muzzle_extension / args.voxel_pitch))
+
+        if muzzle_cut_x is not None:
+            # Map world X to grid index i
+            i_cut = int(round((muzzle_cut_x - origin[0]) / args.voxel_pitch))
+            logical_muzzle_vox = i_cut + muzzle_extension_vox
+            if 0 <= i_cut < gun_sdf.shape[0]:
+                console.print(f"  [green]Normalizing muzzle profile from i={i_cut} to {logical_muzzle_vox}[/green]")
+                # Capture the cross-section
+                slice_profile = gun_sdf[i_cut, :, :].copy()
+                # Extrude it forward only up to logical_muzzle_vox
+                i_end_extrude = min(gun_sdf.shape[0], logical_muzzle_vox + 1)
+                gun_sdf[i_cut:i_end_extrude, :, :] = slice_profile[None, :, :]
+                # Cap the rest of the array with outside_val to ensure a watertight mesh
+                if i_end_extrude < gun_sdf.shape[0]:
+                    gun_sdf[i_end_extrude:, :, :] = outside_val
+        else:
+            logical_muzzle_vox = muzzle_vox
+
         emit_progress(0.50, "computing swept cavity volume")
-        insertion_vox = int(round(args.total_length / args.voxel_pitch))
+        insertion_vox = int(round(effective_total_length / args.voxel_pitch))
         
         # SLICING:
-        # We want the mold to represent the space from Entrance to Muzzle Floor + Pad.
-        # Total length requested is 'insertion_vox'.
-        # The 'end' of our model should be (muzzle_vox + pad).
-        # The 'start' should be (end - insertion_vox).
-        end = min(gun_sdf.shape[0], muzzle_vox + pad_vox + 1)
+        # We want the mold to represent exactly 'effective_total_length'.
+        # The 'end' of our model should be the normalized muzzle floor + small pad.
+        # We want the mold to END at (logical_muzzle_vox + pad).
+        
+        end = min(gun_sdf.shape[0], logical_muzzle_vox + pad_vox + 1)
+        # Slicing backward from 'end' to capture exactly 'insertion_vox'
         start = end - insertion_vox
         slice_start = max(0, start)
         pad_entrance = max(0, -start)
@@ -537,13 +598,52 @@ def main() -> None:
         occupancy = cavity_sdf < 0
         tg = detect_trigger_guard(occupancy, cavity_origin, args.voxel_pitch, console)
         
-        # In this slice, the physical muzzle is exactly at (muzzle_vox - slice_start + pad_entrance)
-        physical_muzzle_i = muzzle_vox - slice_start + pad_entrance
-        context = {"tg": tg, "physical_muzzle_i": physical_muzzle_i}
+        # physical_muzzle_i is the World +X limit in this slice
+        # It's at (logical_muzzle_vox - slice_start + pad_entrance)
+        physical_muzzle_i = logical_muzzle_vox - slice_start + pad_entrance
+        logical_muzzle_x = cavity_origin[0] + physical_muzzle_i * args.voxel_pitch
+        
+        # Real firearm muzzle for scan alignment
+        scan_muzzle_i = muzzle_vox - slice_start + pad_entrance
+        scan_muzzle_x = cavity_origin[0] + scan_muzzle_i * args.voxel_pitch
+
+        # Calculate Y bounds for automatic features like trigger_platen
+        occupancy = cavity_sdf < 0
+        occupied_indices_y = np.where(occupancy.any(axis=(0, 2)))[0]
+        y_min_vox = int(occupied_indices_y.min()) if len(occupied_indices_y) > 0 else 0
+        y_max_vox = int(occupied_indices_y.max()) if len(occupied_indices_y) > 0 else 0
+        y_min_world = cavity_origin[1] + y_min_vox * args.voxel_pitch
+        y_max_world = cavity_origin[1] + y_max_vox * args.voxel_pitch
+        
+        # Robust slide top detection (consistent with detect_features.py/Scene.tsx)
+        slide_top_y = y_max_world # Fallback
+        y_idx = np.where(occupancy, np.arange(gun_sdf.shape[1])[None, :, None], -1)
+        top_y_grid = y_idx.max(axis=1)
+        material_mask = top_y_grid >= 0
+        if material_mask.any():
+            plateau_ref = float(np.percentile(top_y_grid[material_mask], 75))
+            slide_top_y = cavity_origin[1] + plateau_ref * args.voxel_pitch
+
+        context = {"tg": tg, "physical_muzzle_i": physical_muzzle_i, "features_state": fs}
 
         if not args.no_cache:
-            _save_prep_cache(cache_base, cache_key, aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i)
+            _save_prep_cache(cache_base, cache_key, aligned, cavity_sdf, cavity_origin, insertion_vox, tg, physical_muzzle_i, y_min_world, y_max_world, slide_top_y)
             console.print(f"cached prep under {cache_key}")
+
+    # ALWAYS write meta.json to the job directory for downstream tasks (like CAD export)
+    meta_path = out_dir / "meta.json"
+    meta_path.write_text(json.dumps({
+        "total_length": effective_total_length,
+        "muzzle_x": logical_muzzle_x,
+        "scan_muzzle_x": scan_muzzle_x,
+        "muzzle_extension": muzzle_extension,
+        "pitch": args.voxel_pitch,
+        "physical_muzzle_i": physical_muzzle_i,
+        "y_min": y_min_world,
+        "y_max": y_max_world,
+        "slide_top_y": float(slide_top_y),
+        "origin": cavity_origin.tolist()
+    }))
 
     aligned_out = out_dir / f"{stem}_mabr_aligned{suffix}.stl"
     aligned.export(aligned_out)
@@ -557,6 +657,13 @@ def main() -> None:
         else:
             aligned.export(gun_dec_out)
         console.print(f"wrote {gun_dec_out.name} (target {args.gun_decim_target})")
+
+    # Export base cavity (no features) for CAD reference
+    emit_progress(0.62, "exporting base cavity mesh")
+    base_mesh = cavity_to_mesh(cavity_sdf, cavity_origin, args.voxel_pitch, step_size=args.mc_step_size)
+    base_out = out_dir / "base_cavity.stl"
+    base_mesh.export(base_out)
+    console.print(f"wrote {base_out.name}")
 
     # Features use the origin established during prep
     console.rule("Features")
@@ -583,7 +690,7 @@ def main() -> None:
     # stair-steps on angled surfaces.
     original_cavity_bin = (cavity_sdf < 0).astype(np.float32)
     cavity_bin = original_cavity_bin.copy()
-    context = {"tg": tg, "physical_muzzle_i": physical_muzzle_i}
+    context = {"tg": tg, "physical_muzzle_i": physical_muzzle_i, "features_state": fs}
     
     enabled_fids = [fid for fid, state in features_state.items() if (isinstance(state, list) and any(s.get("enabled") for s in state)) or (isinstance(state, dict) and state.get("enabled"))]
     

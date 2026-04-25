@@ -11,6 +11,8 @@ import triggerPlaten from "./trigger_platen/feature";
 import slideCircles from "./slide_circles/feature";
 import sightChannel from "./sight_channel/feature";
 import gunBand from "./gun_band/feature";
+import muzzleCut from "./muzzle_cut/feature";
+import nub from "./nub/feature";
 
 export const FEATURES: FeatureDef[] = [
   triggerRetention,
@@ -21,4 +23,6 @@ export const FEATURES: FeatureDef[] = [
   slideCircles,
   sightChannel,
   gunBand,
+  muzzleCut,
+  nub,
 ];

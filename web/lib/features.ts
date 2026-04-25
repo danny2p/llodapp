@@ -74,6 +74,7 @@ export type GlobalParams = {
   gunColor: string;
   moldColor: string;
   totalLength: number;
+  featureStates?: FeatureStates;
 };
 
 // Props passed to a feature's R3F overlay component.
@@ -89,6 +90,8 @@ export type FeatureOverlayProps = {
     center: THREE.Vector3;
     slideTopY: number;
   } | null;
+  activeTag?: { featureId: string; instanceIndex: number; pointIndex: number } | null;
+  onTagPoint?: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
 };
 
 export type FeatureDef = {

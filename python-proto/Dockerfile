@@ -3,11 +3,17 @@ FROM python:3.12-slim
 # Prevent interactive prompts during build
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies for rtree, open3d, and mesh processing
+# Install system dependencies for rtree, open3d, and CadQuery (OCP)
 RUN apt-get update --fix-missing && apt-get install -y \
     libspatialindex-dev \
     libgl1 \
     libgomp1 \
+    libx11-6 \
+    libxext6 \
+    libxrender1 \
+    libfontconfig1 \
+    libfreetype6 \
+    libglu1-mesa \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

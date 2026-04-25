@@ -31,11 +31,27 @@ def apply(cavity_bin, origin, pitch, *, state, insertion_vox, context, console):
     muzzle_i = context.get("physical_muzzle_i", nx - 1)
     
     # 3. Calculate Ranges
-    # X range: From (muzzle_i - total_length + 30mm) to muzzle_i
+    muzzle_extension = 0.0
+    fs = context.get("features_state", {})
+    mc_instances = fs.get("muzzle_cut", [])
+    if isinstance(mc_instances, dict): mc_instances = [mc_instances]
+    for mc in mc_instances:
+        if mc.get("enabled"):
+            muzzle_extension = float(mc.get("values", {}).get("extension", 30.0))
+            break
+            
     vox_total = int(round(insertion_vox))
     vox_30 = int(round(30.0 / pitch))
-    i_start = max(0, muzzle_i - vox_total + vox_30)
+    muzzle_ext_vox = int(round(muzzle_extension / pitch))
+    
+    # Platen length is (TotalLength - 30 + Extension) in voxels
+    platen_length_vox = vox_total - vox_30 + muzzle_ext_vox
+    
+    i_start = max(0, muzzle_i - platen_length_vox)
     i_end = muzzle_i
+    
+    if console:
+        console.print(f"     Platen Debug: i_start={i_start}, i_end={i_end} (length_vox={platen_length_vox})")
     
     # Y range: From j_min to (j_max - 15mm)
     vox_15 = int(round(15.0 / pitch))

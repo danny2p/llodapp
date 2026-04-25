@@ -51,28 +51,19 @@ def main() -> None:
             acc_mesh.apply_scale(scale)
             
         # 3. Rotate
-        # Scene.tsx:
-        # rotation={[
-        #   ((data.rotation[0] + 90) * Math.PI) / 180,
-        #   (data.rotation[1] * Math.PI) / 180,
-        #   (data.rotation[2] * Math.PI) / 180,
-        # ]}
         rot = acc.get("rotation", [0, 0, 0])
         euler = [
             (rot[0] + 90) * np.pi / 180.0,
             rot[1] * np.pi / 180.0,
             rot[2] * np.pi / 180.0
         ]
-        # Three.js uses 'XYZ' order by default. 
-        # trimesh.transformations.euler_matrix uses 'sxyz' for static XYZ.
         matrix = trimesh.transformations.euler_matrix(euler[0], euler[1], euler[2], 'sxyz')
         acc_mesh.apply_transform(matrix)
         
         # 4. Translate
-        # acc["position"] is relative to centered base mesh.
-        # So in world space it is acc["position"] + center.
+        # acc["position"] is in world space.
         pos = np.array(acc.get("position", [0, 0, 0]))
-        acc_mesh.apply_translation(pos + center)
+        acc_mesh.apply_translation(pos)
         
         meshes_to_merge.append(acc_mesh)
         
