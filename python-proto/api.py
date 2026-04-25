@@ -96,8 +96,10 @@ async def _run_stream(cmd: list[str]):
                         last_p = data['p']
                 except:
                     pass
-            # Optional: Log other output to stderr for debugging
-            # else: print(f"SUBPROCESS: {line.strip()}")
+            else:
+                clean_line = line.strip()
+                if clean_line:
+                    yield {"type": "log", "data": clean_line}
 
     return_code = process.wait()
     if return_code != 0:
@@ -318,6 +320,9 @@ async def process_stream(
         if tg_json.exists():
             tg_anchor = json.loads(tg_json.read_text())
 
+        meta_json = job_dir / "meta.json"
+        meta = json.loads(meta_json.read_text()) if meta_json.exists() else {}
+
         def url(p: Path) -> str:
             return f"/jobs/{job_id}/{p.name}"
 
@@ -328,6 +333,12 @@ async def process_stream(
             "leftUrl": url(left_path),
             "rightUrl": url(right_path),
             "tgAnchor": tg_anchor,
+            "muzzleX": meta.get("muzzle_x"),
+            "scanMuzzleX": meta.get("scan_muzzle_x", meta.get("muzzle_x")),
+            "muzzleExtension": meta.get("muzzle_extension", 0.0),
+            "yMin": meta.get("y_min", 0.0),
+            "yMax": meta.get("y_max", 0.0),
+            "slideTopY": meta.get("slide_top_y", 0.0),
         }
 
         yield json.dumps({"type": "result", "data": result}) + "\n"
@@ -399,6 +410,9 @@ async def process(
     if tg_json.exists():
         tg_anchor = json.loads(tg_json.read_text())
 
+    meta_json = job_dir / "meta.json"
+    meta = json.loads(meta_json.read_text()) if meta_json.exists() else {}
+
     def url(p: Path) -> str:
         return f"/jobs/{job_id}/{p.name}"
 
@@ -409,6 +423,12 @@ async def process(
         "leftUrl": url(left_path),
         "rightUrl": url(right_path),
         "tgAnchor": tg_anchor,
+        "muzzleX": meta.get("muzzle_x"),
+        "scanMuzzleX": meta.get("scan_muzzle_x", meta.get("muzzle_x")),
+        "muzzleExtension": meta.get("muzzle_extension", 0.0),
+        "yMin": meta.get("y_min", 0.0),
+        "yMax": meta.get("y_max", 0.0),
+        "slideTopY": meta.get("slide_top_y", 0.0),
     }
 
 
@@ -428,6 +448,12 @@ async def download_merged(
         full_path = _one(job_dir, f"*_swept_mabr_*.stl")
     except HTTPException:
         raise HTTPException(status_code=404, detail=f"Base or full STL not found for job {job_id}")
+
+    meta_json = job_dir / "meta.json"
+    meta = json.loads(meta_json.read_text()) if meta_json.exists() else {}
+    # Accessories are tagged relative to the actual firearm scan.
+    # Use scan_muzzle_x for proper reference.
+    scan_muzzle_x = meta.get("scan_muzzle_x", meta.get("muzzle_x", 80.0))
 
     # Output path
     out_name = f"merged_{side}_{uuid.uuid4().hex[:8]}.stl"

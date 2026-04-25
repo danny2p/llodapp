@@ -523,6 +523,9 @@ export default function Page() {
     fullUrl: API_BASE + urls.fullUrl,
     leftUrl: API_BASE + urls.leftUrl,
     rightUrl: API_BASE + urls.rightUrl,
+    muzzleX: urls.muzzleX,
+    scanMuzzleX: urls.scanMuzzleX,
+    muzzleExtension: urls.muzzleExtension,
   });
 
   const processFile = useCallback(
@@ -573,6 +576,8 @@ export default function Page() {
               if (msg.type === "progress") {
                 setProcessingLogs((prev) => [...prev, msg.data.l]);
                 setProcessingProgress(msg.data.p);
+              } else if (msg.type === "log") {
+                setProcessingLogs((prev) => [...prev, msg.data]);
               } else if (msg.type === "result") {
                 setAlignedGunUrl(API_BASE + msg.data.alignedUrl);
                 setUploadedFile(file);
@@ -648,6 +653,8 @@ export default function Page() {
             if (msg.type === "progress") {
               setProcessingLogs((prev) => [...prev, msg.data.l]);
               setProcessingProgress(msg.data.p);
+            } else if (msg.type === "log") {
+              setProcessingLogs((prev) => [...prev, msg.data]);
             } else if (msg.type === "result") {
               const data = msg.data as ProcessResponse;
               setJobId(data.jobId);
