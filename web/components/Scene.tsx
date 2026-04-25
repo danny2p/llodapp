@@ -924,18 +924,14 @@ function MuzzleCutPlane({
   return (
     <group position={[cutX, centerY, 0]}>
       <mesh {...(bind() as any)} rotation={[0, Math.PI / 2, 0]}>
-        <planeGeometry args={[100, 100]} />
+        <planeGeometry args={[300, 300]} />
         <meshBasicMaterial 
           color="#4ADE80" 
           transparent 
-          opacity={active ? 0.4 : 0.2} 
+          opacity={active ? 0.1 : 0.04} 
           side={THREE.DoubleSide} 
+          depthWrite={false}
         />
-      </mesh>
-      {/* Visual indicator for dragging handle */}
-      <mesh position={[0, 52, 0]} rotation={[0, Math.PI / 2, 0]}>
-        <sphereGeometry args={[2, 16, 16]} />
-        <meshBasicMaterial color="#4ADE80" />
       </mesh>
     </group>
   );
@@ -1287,7 +1283,7 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
           {gunBounds && <BboxDebugLabels bounds={gunBounds} />}
 
           {/* Draggable Muzzle Cut Plane */}
-          {FEATURES.filter(d => d.id === "muzzle_cut").map(def => {
+          {globalParams.showFeatures && FEATURES.filter(d => d.id === "muzzle_cut").map(def => {
             const instances = featureStates[def.id] || [];
             return instances.map((state, idx) => {
               if (!state.enabled) return null;
