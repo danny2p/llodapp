@@ -112,7 +112,7 @@ export type PlacedAccessory = {
   scale: number;
 };
 
-export type Step = 1 | 1.5 | 2 | 3;
+export type Step = 1 | 1.5 | 1.75 | 2 | 3;
 
 // Which feature point is the user actively tagging?
 export type ActiveTag = { featureId: string; instanceIndex: number; pointIndex: number } | null;
@@ -129,25 +129,31 @@ const STEP_META: Record<
   },
   1.5: {
     id: "02",
+    title: "ALIGN",
+    subtitle: "Review aligned scan",
+    icon: <Layers size={14} />,
+  },
+  1.75: {
+    id: "03",
     title: "ENHANCE",
-    subtitle: "Tag feature anchors",
+    subtitle: "Tag features on cavity",
     icon: <Crosshair size={14} />,
   },
   2: {
-    id: "03",
+    id: "04",
     title: "PROCESS",
-    subtitle: "Sweep + voxelize",
+    subtitle: "Apply features + decimate",
     icon: <Cpu size={14} />,
   },
   3: {
-    id: "04",
+    id: "05",
     title: "EXPORT",
     subtitle: "Split + export halves",
     icon: <Scissors size={14} />,
   },
 };
 
-const STEP_ORDER: Step[] = [1, 1.5, 2, 3];
+const STEP_ORDER: Step[] = [1, 1.5, 1.75, 2, 3];
 
 // ────────────────────────────────────────────────────────────────────
 // PAGE
@@ -166,6 +172,13 @@ export default function Page() {
   );
   const [activeTag, setActiveTag] = useState<ActiveTag>(null);
   const [alignedGunUrl, setAlignedGunUrl] = useState<string | null>(null);
+  const [cavityUrl, setCavityUrl] = useState<string | null>(null);
+  const [cavityMeta, setCavityMeta] = useState<{
+    muzzleX?: number;
+    scanMuzzleX?: number;
+    muzzleExtension?: number;
+    slideTopY?: number;
+  } | null>(null);
   const [placedAccessories, setPlacedAccessories] = useState<PlacedAccessory[]>(
     []
   );
@@ -582,11 +595,13 @@ export default function Page() {
                 setProcessingLogs((prev) => [...prev, msg.data]);
               } else if (msg.type === "result") {
                 setAlignedGunUrl(API_BASE + msg.data.alignedUrl);
+                setJobId(msg.data.jobId);
                 setUploadedFile(file);
                 setSelectedSampleName(sampleName);
                 setFileName(file?.name || sampleName || "sample");
+                setCavityUrl(null);
+                setCavityMeta(null);
                 setStep(1.5);
-                setActiveTag(findNextUntaggedPoint(featureStates, null));
               } else if (msg.type === "error") {
                 throw new Error(
                   msg.detail.stderr || `Error ${msg.detail.code} in alignment`
@@ -606,9 +621,77 @@ export default function Page() {
     [featureStates]
   );
 
+  const sweepCavity = useCallback(async () => {
+    if (!jobId) {
+      console.warn("No jobId — cannot sweep cavity");
+      return;
+    }
+    setError(null);
+    setIsProcessing(true);
+    setProcessingLogs([]);
+    setProcessingProgress(0);
+    try {
+      const form = new FormData();
+      form.append("job_id", jobId);
+      form.append("voxel_pitch", String(globalParams.voxelPitch));
+      form.append("mc_step_size", String(globalParams.mcStepSize));
+      form.append("total_length", String(globalParams.totalLength));
+      form.append("rotate_z_deg", String(globalParams.rotateZDeg));
+      form.append("mirror", String(globalParams.mirror));
+
+      const res = await fetch(`${API_BASE}/api/sweep-cavity`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) throw new Error(await readErr(res));
+      if (!res.body) throw new Error("ReadableStream not supported");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.type === "progress") {
+              setProcessingLogs((prev) => [...prev, msg.data.l]);
+              setProcessingProgress(msg.data.p);
+            } else if (msg.type === "log") {
+              setProcessingLogs((prev) => [...prev, msg.data]);
+            } else if (msg.type === "result") {
+              setCavityUrl(API_BASE + msg.data.cavityUrl);
+              setCavityMeta({
+                muzzleX: msg.data.muzzleX,
+                scanMuzzleX: msg.data.scanMuzzleX,
+                muzzleExtension: msg.data.muzzleExtension,
+                slideTopY: msg.data.slideTopY,
+              });
+              setStep(1.75);
+              setActiveTag(findNextUntaggedPoint(featureStates, null));
+            } else if (msg.type === "error") {
+              throw new Error(msg.detail.stderr || `Error ${msg.detail.code} in cavity sweep`);
+            }
+          } catch (e) {
+            console.error("Failed to parse progress line:", line, e);
+          }
+        }
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsProcessing(false);
+    }
+  }, [jobId, globalParams, featureStates]);
+
   const generateMold = useCallback(async () => {
-    if (!uploadedFile && !selectedSampleName) {
-      console.warn("No file or sample selected for generation");
+    if (!jobId) {
+      console.warn("No jobId — must sweep cavity first");
       return;
     }
     setError(null);
@@ -620,18 +703,14 @@ export default function Page() {
     setGlobalParams((p) => ({ ...p, showFeatures: false }));
     try {
       const form = new FormData();
-      if (uploadedFile) {
-        form.append("file", uploadedFile);
-      } else if (selectedSampleName) {
-        form.append("sample_name", selectedSampleName);
-      }
+      form.append("job_id", jobId);
       for (const [k, v] of Object.entries(globalParams)) {
         form.append(CAMEL_TO_SNAKE(k), String(v));
       }
       form.append("total_length", String(globalParams.totalLength));
       form.append("features_state", JSON.stringify(featureStates));
 
-      const res = await fetch(`${API_BASE}/api/process-stream`, {
+      const res = await fetch(`${API_BASE}/api/apply-features`, {
         method: "POST",
         body: form,
       });
@@ -679,11 +758,11 @@ export default function Page() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-      setStep(1.5);
+      setStep(1.75);
     } finally {
       setIsProcessing(false);
     }
-  }, [uploadedFile, selectedSampleName, globalParams, featureStates, absolutize]);
+  }, [jobId, globalParams, featureStates, absolutize]);
 
   const downloadHalf = async (side: "left" | "right") => {
     if (!jobId || !assets) return;
@@ -762,22 +841,31 @@ export default function Page() {
   );
 
   const rerun = useCallback(() => {
-    if (!uploadedFile) return;
+    if (!uploadedFile && !selectedSampleName) return;
     const alignmentChanged =
       !generatedGlobalParams ||
       globalParams.mirror !== generatedGlobalParams.mirror ||
       globalParams.rotateZDeg !== generatedGlobalParams.rotateZDeg;
+    const cavityShapeChanged =
+      !generatedGlobalParams ||
+      globalParams.voxelPitch !== generatedGlobalParams.voxelPitch ||
+      globalParams.totalLength !== generatedGlobalParams.totalLength;
 
     if (alignmentChanged) {
-      void processFile(uploadedFile, globalParams);
+      // Full re-align; user will re-walk the wizard.
+      void processFile(uploadedFile, globalParams, selectedSampleName);
+    } else if (cavityShapeChanged) {
+      void sweepCavity();
     } else {
       void generateMold();
     }
   }, [
     uploadedFile,
+    selectedSampleName,
     globalParams,
     generatedGlobalParams,
     processFile,
+    sweepCavity,
     generateMold,
   ]);
 
@@ -788,6 +876,8 @@ export default function Page() {
     setAssets(null);
     setJobId(null);
     setAlignedGunUrl(null);
+    setCavityUrl(null);
+    setCavityMeta(null);
     setActiveTag(null);
     setFeatureStates(initialFeatureStates());
     setPlacedAccessories([]);
@@ -871,6 +961,7 @@ export default function Page() {
               uploadedFile={uploadedFile}
               fileName={fileName}
               handleUpload={handleUpload}
+              sweepCavity={sweepCavity}
               generateMold={generateMold}
               assets={assets}
               viewMode={viewMode}
@@ -923,6 +1014,7 @@ export default function Page() {
             viewMode={viewMode}
             assets={assets}
             alignedGunUrl={alignedGunUrl}
+            cavityUrl={cavityUrl}
             featureStates={featureStates}
             activeTag={activeTag}
             onTagPoint={onTagPoint}
@@ -1198,6 +1290,7 @@ function StepContext(props: {
   uploadedFile: File | null;
   fileName: string | null;
   handleUpload: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  sweepCavity: () => void;
   generateMold: () => void;
   assets: SceneAssets | null;
   viewMode: ViewMode;
@@ -1237,6 +1330,7 @@ function StepContext(props: {
     uploadedFile,
     fileName,
     handleUpload,
+    sweepCavity,
     generateMold,
     assets,
     viewMode,
@@ -1303,7 +1397,20 @@ function StepContext(props: {
         />
       )}
 
-      {step === 1.5 && (
+      {step === 1.5 && !isProcessing && (
+        <GunPreviewPanel onContinue={sweepCavity} fileName={fileName} />
+      )}
+
+      {step === 1.5 && isProcessing && (
+        <ProcessingStatus
+          fileName={fileName}
+          logs={processingLogs}
+          progress={processingProgress}
+          label="Sweeping Cavity"
+        />
+      )}
+
+      {step === 1.75 && (
         <FeatureTagger
           featureStates={featureStates}
           activeTag={activeTag}
@@ -1344,7 +1451,7 @@ function StepContext(props: {
             downloadCAD={downloadCAD}
             stem={stem}
             reset={reset}
-            onRerun={() => setStep(1.5)}
+            onRerun={() => setStep(1.75)}
           />
       )}
     </Panel>
@@ -1431,7 +1538,50 @@ function UploadDropzone({
 }
 
 // ────────────────────────────────────────────────────────────────────
-// STEP 1.5 — FEATURE TAGGER
+// STEP 1.5 — GUN PREVIEW (review aligned scan)
+// ────────────────────────────────────────────────────────────────────
+
+function GunPreviewPanel({
+  onContinue,
+  fileName,
+}: {
+  onContinue: () => void;
+  fileName: string | null;
+}) {
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="p-3 border border-[var(--hud-line-strong)] bg-[var(--hud-panel-2)] flex flex-col gap-2">
+        <div className="flex items-center gap-2">
+          <Layers size={14} className="text-[var(--hud-teal-bright)]" />
+          <span className="font-display text-[11px] uppercase tracking-widest text-[var(--hud-teal-bright)]">
+            Aligned Scan Loaded
+          </span>
+        </div>
+        <p className="font-mono text-[10px] text-[var(--hud-text-dim)] leading-relaxed">
+          Review the alignment of <span className="text-[var(--hud-teal-bright)]">{fileName ?? "scan"}</span> in
+          the viewer. Rotate, pan, and zoom to confirm the muzzle points to <span className="text-[var(--hud-text)]">+X</span> and
+          the slide top to <span className="text-[var(--hud-text)]">+Y</span>. If alignment looks wrong, adjust
+          <span className="text-[var(--hud-text)]"> Mirror</span> or <span className="text-[var(--hud-text)]">Rotate Z</span> in
+          Global Parameters and re-run.
+        </p>
+        <p className="font-mono text-[10px] text-[var(--hud-text-faint)] leading-relaxed">
+          When the alignment looks right, continue to sweep the cavity from the scan. Features will be tagged on the cavity in the next step.
+        </p>
+      </div>
+      <Button
+        variant="primary"
+        onClick={onContinue}
+        icon={<Cpu size={12} />}
+        className="w-full"
+      >
+        Continue → Sweep Cavity
+      </Button>
+    </div>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────
+// STEP 1.75 — FEATURE TAGGER
 // ────────────────────────────────────────────────────────────────────
 
 function FeatureTagger({

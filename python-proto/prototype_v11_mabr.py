@@ -340,10 +340,11 @@ def _hash_file(path: Path) -> str:
     return h.hexdigest()[:16]
 
 
-def _cache_key(input_path: Path, voxel_pitch: float, mc_step_size: int, rotate_z_deg: float, mirror: bool, total_length: float) -> str:
+def _cache_key(input_path: Path, voxel_pitch: float, mc_step_size: int, rotate_z_deg: float, mirror: bool, total_length: float, muzzle_extension: float) -> str:
     mir = "1" if mirror else "0"
     # has2: HAS migration — cavity origin/sweep convention now muzzle=+X, entrance=index 0. Added mc_step_size.
-    return f"{_hash_file(input_path)}_p{voxel_pitch}_s{mc_step_size}_rz{rotate_z_deg}_m{mir}_l{total_length}_has2"
+    # mext: muzzle_cut changes effective length / cavity slice; key must reflect it or stale hits return wrong cavity.
+    return f"{_hash_file(input_path)}_p{voxel_pitch}_s{mc_step_size}_rz{rotate_z_deg}_m{mir}_l{total_length}_mext{muzzle_extension}_has2"
 
 
 def _load_prep_cache(cache_base: Path, key: str):
@@ -420,6 +421,10 @@ def main() -> None:
                              f"Default: {CACHE_DIR}.")
     parser.add_argument("--no-cache", action="store_true",
                         help="Skip the prep cache: always re-run alignment + voxelization.")
+    parser.add_argument("--cavity-only", action="store_true",
+                        help="Stop after writing base_cavity.stl. Skips feature carving, "
+                             "marching-cubes mesh extraction, and decimation. Used by the "
+                             "cavity-preview workflow step.")
     args = parser.parse_args()
 
     input_path = Path(args.input).resolve()
@@ -463,7 +468,7 @@ def main() -> None:
         suffix += "_mir"
 
     cache_base = Path(args.cache_dir).resolve() if args.cache_dir else CACHE_DIR
-    cache_key = _cache_key(input_path, args.voxel_pitch, args.mc_step_size, args.rotate_z_deg, args.mirror, args.total_length)
+    cache_key = _cache_key(input_path, args.voxel_pitch, args.mc_step_size, args.rotate_z_deg, args.mirror, args.total_length, muzzle_extension)
     cached = None if args.no_cache else _load_prep_cache(cache_base, cache_key)
 
     if cached is not None:
@@ -664,6 +669,10 @@ def main() -> None:
     base_out = out_dir / "base_cavity.stl"
     base_mesh.export(base_out)
     console.print(f"wrote {base_out.name}")
+
+    if args.cavity_only:
+        emit_progress(1.0, "cavity-only mode complete")
+        return
 
     # Features use the origin established during prep
     console.rule("Features")

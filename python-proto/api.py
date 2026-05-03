@@ -161,6 +161,10 @@ async def align_stream(
         input_path = job_dir / sample_path.name
         shutil.copy2(sample_path, input_path)
 
+    # Persist the input filename so /api/sweep-cavity and /api/apply-features
+    # can reuse this job dir (and the prep cache) without re-uploading.
+    (job_dir / "input.txt").write_text(input_path.name)
+
     async def event_generator():
         yield json.dumps({"type": "progress", "data": {"p": 0.0, "l": "initializing alignment"}}) + "\n"
 
@@ -299,6 +303,179 @@ async def process_stream(
         yield json.dumps({"type": "progress", "data": {"p": 0.98, "l": "splitting mold into halves"}}) + "\n"
 
         # Split is fast, usually doesn't need its own stream logic but we can wrap it
+        plug_path = _one(job_dir, f"*_swept_mabr_*_decim{plug_decim_target}*.stl")
+        gun_path = _one(job_dir, f"*_mabr_aligned_decim{gun_decim_target}*.stl")
+
+        try:
+            _run([
+                sys.executable, str(HERE / "split_plug.py"),
+                "--input", str(plug_path),
+                "--out-dir", str(job_dir),
+            ])
+        except Exception as e:
+            yield json.dumps({"type": "error", "detail": {"code": 500, "stderr": str(e)}}) + "\n"
+            return
+
+        left_path = _one(job_dir, "*_left.stl")
+        right_path = _one(job_dir, "*_right.stl")
+
+        tg_json = job_dir / "tg.json"
+        tg_anchor = None
+        if tg_json.exists():
+            tg_anchor = json.loads(tg_json.read_text())
+
+        meta_json = job_dir / "meta.json"
+        meta = json.loads(meta_json.read_text()) if meta_json.exists() else {}
+
+        def url(p: Path) -> str:
+            return f"/jobs/{job_id}/{p.name}"
+
+        result = {
+            "jobId": job_id,
+            "gunUrl": url(gun_path),
+            "fullUrl": url(plug_path),
+            "leftUrl": url(left_path),
+            "rightUrl": url(right_path),
+            "tgAnchor": tg_anchor,
+            "muzzleX": meta.get("muzzle_x"),
+            "scanMuzzleX": meta.get("scan_muzzle_x", meta.get("muzzle_x")),
+            "muzzleExtension": meta.get("muzzle_extension", 0.0),
+            "yMin": meta.get("y_min", 0.0),
+            "yMax": meta.get("y_max", 0.0),
+            "slideTopY": meta.get("slide_top_y", 0.0),
+        }
+
+        yield json.dumps({"type": "result", "data": result}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+def _resolve_job_input(job_id: str) -> tuple[Path, Path]:
+    job_dir = JOBS_DIR / job_id
+    if not job_dir.exists():
+        raise HTTPException(status_code=404, detail=f"Job {job_id} not found")
+    marker = job_dir / "input.txt"
+    if not marker.exists():
+        raise HTTPException(status_code=400, detail=f"Job {job_id} has no recorded input STL")
+    input_path = job_dir / marker.read_text().strip()
+    if not input_path.exists():
+        raise HTTPException(status_code=500, detail=f"Recorded input {input_path.name} missing from job dir")
+    return job_dir, input_path
+
+
+@app.post("/api/sweep-cavity")
+async def sweep_cavity(
+    job_id: str = Form(...),
+    voxel_pitch: float = Form(0.25),
+    mc_step_size: int = Form(2),
+    total_length: float = Form(160.0),
+    mirror: bool = Form(False),
+    rotate_z_deg: float = Form(0.0),
+):
+    """Run alignment + cavity sweep on an existing job (created by /api/align-stream).
+    Stops after exporting base_cavity.stl. No features are applied."""
+    job_dir, input_path = _resolve_job_input(job_id)
+
+    async def event_generator():
+        yield json.dumps({"type": "progress", "data": {"p": 0.0, "l": "initializing cavity sweep"}}) + "\n"
+
+        cmd: list[str] = [
+            sys.executable, str(HERE / "prototype_v11_mabr.py"),
+            "--input", str(input_path),
+            "--out-dir", str(job_dir),
+            "--voxel-pitch", str(voxel_pitch),
+            "--mc-step-size", str(mc_step_size),
+            "--total-length", str(total_length),
+            "--rotate-z-deg", str(rotate_z_deg),
+            "--cavity-only",
+        ]
+        if mirror:
+            cmd.append("--mirror")
+
+        async for msg in _run_stream(cmd):
+            if msg["type"] == "error":
+                yield json.dumps(msg) + "\n"
+                return
+            yield json.dumps(msg) + "\n"
+
+        cavity_path = job_dir / "base_cavity.stl"
+        if not cavity_path.exists():
+            yield json.dumps({"type": "error", "detail": {"code": 500, "stderr": "base_cavity.stl missing after sweep"}}) + "\n"
+            return
+
+        meta_json = job_dir / "meta.json"
+        meta = json.loads(meta_json.read_text()) if meta_json.exists() else {}
+
+        result = {
+            "jobId": job_id,
+            "cavityUrl": f"/jobs/{job_id}/{cavity_path.name}",
+            "muzzleX": meta.get("muzzle_x"),
+            "scanMuzzleX": meta.get("scan_muzzle_x", meta.get("muzzle_x")),
+            "muzzleExtension": meta.get("muzzle_extension", 0.0),
+            "yMin": meta.get("y_min", 0.0),
+            "yMax": meta.get("y_max", 0.0),
+            "slideTopY": meta.get("slide_top_y", 0.0),
+        }
+
+        tg_json = job_dir / "tg.json"
+        if tg_json.exists():
+            result["tgAnchor"] = json.loads(tg_json.read_text())
+
+        yield json.dumps({"type": "result", "data": result}) + "\n"
+
+    return StreamingResponse(event_generator(), media_type="application/x-ndjson")
+
+
+@app.post("/api/apply-features")
+async def apply_features(
+    job_id: str = Form(...),
+    voxel_pitch: float = Form(0.25),
+    mc_step_size: int = Form(2),
+    smooth_sigma: float = Form(0.8),
+    plug_decim_target: int = Form(60_000),
+    gun_decim_target: int = Form(60_000),
+    smooth_iter: int = Form(0),
+    total_length: float = Form(160.0),
+    mirror: bool = Form(False),
+    rotate_z_deg: float = Form(0.0),
+    features_state: str = Form(...),
+):
+    """Apply features to a previously-swept cavity. The prep cache (alignment +
+    cavity_sdf) populated by /api/sweep-cavity makes this nearly free up to the
+    feature-carving + final mesh extraction phase."""
+    job_dir, input_path = _resolve_job_input(job_id)
+
+    features_path = job_dir / "features_state.json"
+    features_path.write_text(features_state)
+
+    async def event_generator():
+        yield json.dumps({"type": "progress", "data": {"p": 0.0, "l": "initializing feature pass"}}) + "\n"
+
+        cmd: list[str] = [
+            sys.executable, str(HERE / "prototype_v11_mabr.py"),
+            "--input", str(input_path),
+            "--out-dir", str(job_dir),
+            "--decim-target", str(plug_decim_target),
+            "--gun-decim-target", str(gun_decim_target),
+            "--voxel-pitch", str(voxel_pitch),
+            "--mc-step-size", str(mc_step_size),
+            "--smooth-sigma", str(smooth_sigma),
+            "--smooth-iter", str(smooth_iter),
+            "--total-length", str(total_length),
+            "--rotate-z-deg", str(rotate_z_deg),
+            "--features-state", str(features_path),
+        ]
+        if mirror:
+            cmd.append("--mirror")
+
+        async for msg in _run_stream(cmd):
+            if msg["type"] == "error":
+                yield json.dumps(msg) + "\n"
+                return
+            yield json.dumps(msg) + "\n"
+
+        yield json.dumps({"type": "progress", "data": {"p": 0.98, "l": "splitting mold into halves"}}) + "\n"
+
         plug_path = _one(job_dir, f"*_swept_mabr_*_decim{plug_decim_target}*.stl")
         gun_path = _one(job_dir, f"*_mabr_aligned_decim{gun_decim_target}*.stl")
 

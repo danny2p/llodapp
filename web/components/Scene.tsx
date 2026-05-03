@@ -22,7 +22,7 @@ import {
 } from "@/lib/features";
 import { flfFromPoints, HAS_DEFAULT_R, type Vec3 } from "@/lib/featuresFrame";
 
-export type Step = 1 | 1.5 | 2 | 3;
+export type Step = 1 | 1.5 | 1.75 | 2 | 3;
 export type ViewMode = "unified" | "left" | "right";
 
 export type PlacedAccessory = {
@@ -58,6 +58,7 @@ type SceneProps = {
   viewMode: ViewMode;
   assets: SceneAssets | null;
   alignedGunUrl?: string | null;
+  cavityUrl?: string | null;
   featureStates: FeatureStates;
   activeTag: ActiveTag;
   onTagPoint: (featureId: string, instanceIndex: number, pointIndex: number, coords: Vec3) => void;
@@ -235,6 +236,20 @@ function PickingGun({
         <meshBasicMaterial color="#ffffff" wireframe transparent opacity={isProcessing ? 0.05 : 0.1} />
       </mesh>
     </group>
+  );
+}
+
+function GhostGun({ url, color }: { url: string; color: string }) {
+  const geometry = useLoader(STLLoader, url);
+  const g = useMemo(() => {
+    const cloned = geometry.clone();
+    cloned.computeVertexNormals();
+    return cloned;
+  }, [geometry]);
+  return (
+    <mesh geometry={g}>
+      <meshStandardMaterial color={color} transparent opacity={0.18} depthWrite={false} />
+    </mesh>
   );
 }
 
@@ -1163,6 +1178,7 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
     viewMode,
     assets,
     alignedGunUrl,
+    cavityUrl,
     featureStates,
     activeTag,
     onTagPoint,
@@ -1246,28 +1262,17 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
         <>
           <PickingGun
             url={alignedGunUrl}
-            activeTag={activeTag}
+            activeTag={null}
             onTagPoint={onTagPoint}
             gunColor={globalParams.gunColor}
             meshRef={gunMeshRef}
             onLoad={handleGunLoad}
             scanMuzzleX={assets?.scanMuzzleX ?? 0}
             isProcessing={isProcessing}
-            visible={globalParams.showGun}
+            visible={true}
           />
-          {globalParams.showFeatures && (
-            <FeatureOverlays
-              featureStates={featureStates}
-              globalParams={globalParams}
-              muzzleX={gunMuzzleX}
-              gunTopY={gunTopY}
-              gunBounds={gunBounds}
-              activeTag={activeTag}
-              onTagPoint={onTagPoint}
-            />
-          )}
-          
-          {/* Visual indicator for Total Length (Insertion Depth) — entrance plane at -X side of the mold. */}
+
+          {/* Visual indicator for Total Length (Insertion Depth) — entrance plane at -X side of the cavity. */}
           <group position={[gunMuzzleX - globalParams.totalLength, gunBounds?.center.y ?? 0, 0]}>
             <mesh rotation={[0, Math.PI / 2, 0]}>
               <planeGeometry args={[100, 100]} />
@@ -1279,6 +1284,36 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
               </div>
             </Html>
           </group>
+        </>
+      )}
+
+      {step === 1.75 && cavityUrl && (
+        <>
+          <PickingGun
+            url={cavityUrl}
+            activeTag={activeTag}
+            onTagPoint={onTagPoint}
+            gunColor={globalParams.moldColor}
+            meshRef={gunMeshRef}
+            onLoad={handleGunLoad}
+            scanMuzzleX={assets?.scanMuzzleX ?? 0}
+            isProcessing={isProcessing}
+            visible={true}
+          />
+          {globalParams.showGun && alignedGunUrl && (
+            <GhostGun url={alignedGunUrl} color={globalParams.gunColor} />
+          )}
+          {globalParams.showFeatures && (
+            <FeatureOverlays
+              featureStates={featureStates}
+              globalParams={globalParams}
+              muzzleX={gunMuzzleX}
+              gunTopY={gunTopY}
+              gunBounds={gunBounds}
+              activeTag={activeTag}
+              onTagPoint={onTagPoint}
+            />
+          )}
 
           {gunBounds && <BboxDebugLabels bounds={gunBounds} />}
 
@@ -1318,12 +1353,12 @@ function LoadedScene(props: SceneProps & { onDraggingChanged: (d: boolean) => vo
         />
       )}
 
-      {step === 1.5 &&
+      {step === 1.75 &&
         markers.map((m) => (
-          <FeatureMarker 
-            key={m.key} 
-            coords={m.coords} 
-            color={m.color} 
+          <FeatureMarker
+            key={m.key}
+            coords={m.coords}
+            color={m.color}
             active={m.active}
             featureId={m.featureId}
             instanceIndex={m.instanceIndex}
